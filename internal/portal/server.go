@@ -547,7 +547,6 @@ func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 		return true
 	}
 	u, p, ok := r.BasicAuth()
-	u, p, ok := r.BasicAuth()
 	if !ok || u != s.adminUser || p != s.adminPass {
 		w.Header().Set("WWW-Authenticate", `Basic realm="admin"`)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
