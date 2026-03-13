@@ -52,7 +52,7 @@ const adminHTML = `<!doctype html>
       .btn{padding:10px 12px;border:1px solid #193657;border-radius:8px;background:#13223a;color:var(--text);cursor:pointer}
       .btn:hover{background:#162846}
       .table{width:100%;border-collapse:collapse;margin-top:8px}
-      .table th,.table td{padding:8px;border-bottom:1px solid #0b152b;font-size:14px;color:var(--muted)}
+      .table th,.table td{padding:8px;border-bottom:1px solid #0b152b;font-size:14px;color:var(--muted);white-space:nowrap}
       .muted{color:var(--muted)}
 
       @media (max-width:960px){
@@ -242,6 +242,7 @@ const adminHTML = `<!doctype html>
           r.forEach(cell => {
             const td = document.createElement('td');
             td.textContent = cell;
+            td.title = cell;
             tr.appendChild(td);
           });
           body.appendChild(tr);
