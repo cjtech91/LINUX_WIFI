@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"linux_wifi/internal/gpio"
@@ -20,23 +21,32 @@ import (
 )
 
 type ServerDeps struct {
-	Store          *store.Store
-	Allowlister    Allowlister
-	DefaultMinutes int
-	Title          string
-	AdminUser      string
-	AdminPass      string
+	Store             *store.Store
+	Allowlister       Allowlister
+	DefaultMinutes    int
+	Title             string
+	AdminUser         string
+	AdminPass         string
+	CoinCounter       gpio.PulseCounter
+	CoinPesoPerPulse  int
+	CoinWindowSeconds int
 }
 
 type Server struct {
-	store          *store.Store
-	allowlister    Allowlister
-	defaultMinutes int
-	title          string
-	portalTmpl     *template.Template
-	adminUser      string
-	adminPass      string
-	adminTmpl      *template.Template
+	store            *store.Store
+	allowlister      Allowlister
+	defaultMinutes   int
+	title            string
+	portalTmpl       *template.Template
+	adminUser        string
+	adminPass        string
+	adminTmpl        *template.Template
+	coinCounter      gpio.PulseCounter
+	coinPesoPerPulse int
+	coinWindow       time.Duration
+
+	coinMu   sync.Mutex
+	coinSess *coinSession
 }
 
 func NewServer(d ServerDeps) *Server {
@@ -56,15 +66,31 @@ func NewServer(d ServerDeps) *Server {
 	tmpl := template.Must(template.New("portal").Parse(portalHTML))
 	admin := template.Must(template.New("admin").Parse(adminHTML))
 
+	counter := d.CoinCounter
+	if counter == nil {
+		counter = gpio.DisabledPulseCounter{}
+	}
+	pesoPerPulse := d.CoinPesoPerPulse
+	if pesoPerPulse <= 0 {
+		pesoPerPulse = 1
+	}
+	windowSec := d.CoinWindowSeconds
+	if windowSec <= 0 {
+		windowSec = 60
+	}
+
 	return &Server{
-		store:          d.Store,
-		allowlister:    allowlister,
-		defaultMinutes: mins,
-		title:          title,
-		portalTmpl:     tmpl,
-		adminUser:      strings.TrimSpace(d.AdminUser),
-		adminPass:      strings.TrimSpace(d.AdminPass),
-		adminTmpl:      admin,
+		store:            d.Store,
+		allowlister:      allowlister,
+		defaultMinutes:   mins,
+		title:            title,
+		portalTmpl:       tmpl,
+		adminUser:        strings.TrimSpace(d.AdminUser),
+		adminPass:        strings.TrimSpace(d.AdminPass),
+		adminTmpl:        admin,
+		coinCounter:      counter,
+		coinPesoPerPulse: pesoPerPulse,
+		coinWindow:       time.Duration(windowSec) * time.Second,
 	}
 }
 
@@ -75,6 +101,11 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/vouchers", s.handleCreateVoucher)
 	mux.HandleFunc("POST /api/v1/login", s.handleAPILogin)
 	mux.HandleFunc("GET /api/v1/status", s.handleStatus)
+	mux.HandleFunc("GET /api/v1/rates", s.handleClientRates)
+	mux.HandleFunc("POST /api/v1/coin/start", s.handleCoinStart)
+	mux.HandleFunc("GET /api/v1/coin/status", s.handleCoinStatus)
+	mux.HandleFunc("POST /api/v1/coin/commit", s.handleCoinCommit)
+	mux.HandleFunc("POST /api/v1/coin/cancel", s.handleCoinCancel)
 
 	mux.HandleFunc("GET /admin", s.handleAdmin)
 	mux.HandleFunc("GET /api/admin/summary", s.handleAdminSummary)
@@ -241,6 +272,313 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		resp.SecondsLeft = secondsLeft
 	}
 	writeJSON(w, resp)
+}
+
+type rate struct {
+	Minutes  int     `json:"minutes"`
+	Price    float64 `json:"price"`
+	UpMbps   float64 `json:"up_mbps,omitempty"`
+	DownMbps float64 `json:"down_mbps,omitempty"`
+	Pause    bool    `json:"pause,omitempty"`
+}
+
+type coinSession struct {
+	Token     string
+	ClientIP  string
+	StartAt   time.Time
+	ExpiresAt time.Time
+	BaseCount uint64
+}
+
+func (s *Server) handleClientRates(w http.ResponseWriter, r *http.Request) {
+	rates := s.getRates(r.Context())
+	writeJSON(w, struct {
+		Items []rate `json:"items"`
+	}{
+		Items: rates,
+	})
+}
+
+func (s *Server) handleCoinStart(w http.ResponseWriter, r *http.Request) {
+	if !s.coinCounter.Enabled() {
+		http.Error(w, "coin disabled", http.StatusBadRequest)
+		return
+	}
+	now := time.Now().UTC()
+	clientIP := clientIPFromRequest(r)
+
+	s.coinMu.Lock()
+	defer s.coinMu.Unlock()
+
+	if s.coinSess != nil && now.Before(s.coinSess.ExpiresAt) {
+		secondsLeft := int64(s.coinSess.ExpiresAt.Sub(now).Truncate(time.Second).Seconds())
+		if secondsLeft < 0 {
+			secondsLeft = 0
+		}
+		w.WriteHeader(http.StatusConflict)
+		writeJSON(w, struct {
+			Ok          bool  `json:"ok"`
+			Busy        bool  `json:"busy"`
+			SecondsLeft int64 `json:"seconds_left"`
+		}{
+			Ok:          false,
+			Busy:        true,
+			SecondsLeft: secondsLeft,
+		})
+		return
+	}
+
+	tok, err := newVoucherCode(16)
+	if err != nil {
+		http.Error(w, "coin start failed", http.StatusInternalServerError)
+		return
+	}
+	s.coinSess = &coinSession{
+		Token:     tok,
+		ClientIP:  clientIP,
+		StartAt:   now,
+		ExpiresAt: now.Add(s.coinWindow),
+		BaseCount: s.coinCounter.Current(),
+	}
+
+	writeJSON(w, struct {
+		Ok            bool      `json:"ok"`
+		Token         string    `json:"token"`
+		ExpiresAtUTC  time.Time `json:"expires_at_utc"`
+		PesoPerPulse  int       `json:"peso_per_pulse"`
+		WindowSeconds int       `json:"window_seconds"`
+		ClientIP      string    `json:"client_ip"`
+	}{
+		Ok:            true,
+		Token:         tok,
+		ExpiresAtUTC:  s.coinSess.ExpiresAt,
+		PesoPerPulse:  s.coinPesoPerPulse,
+		WindowSeconds: int(s.coinWindow.Seconds()),
+		ClientIP:      clientIP,
+	})
+}
+
+func (s *Server) handleCoinStatus(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
+		return
+	}
+	now := time.Now().UTC()
+
+	s.coinMu.Lock()
+	sess := s.coinSess
+	s.coinMu.Unlock()
+
+	if sess == nil || sess.Token != token {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	secondsLeft := int64(sess.ExpiresAt.Sub(now).Truncate(time.Second).Seconds())
+	if secondsLeft < 0 {
+		secondsLeft = 0
+	}
+	cur := s.coinCounter.Current()
+	var pulses uint64
+	if cur >= sess.BaseCount {
+		pulses = cur - sess.BaseCount
+	}
+	amount := int64(pulses) * int64(s.coinPesoPerPulse)
+	rates := s.getRates(r.Context())
+	mins, usedAmount := convertAmountToMinutes(rates, amount)
+
+	writeJSON(w, struct {
+		Ok          bool   `json:"ok"`
+		SecondsLeft int64  `json:"seconds_left"`
+		Pulses      uint64 `json:"pulses"`
+		Amount      int64  `json:"amount"`
+		Minutes     int    `json:"minutes"`
+		UsedAmount  int64  `json:"used_amount"`
+	}{
+		Ok:          true,
+		SecondsLeft: secondsLeft,
+		Pulses:      pulses,
+		Amount:      amount,
+		Minutes:     mins,
+		UsedAmount:  usedAmount,
+	})
+}
+
+func (s *Server) handleCoinCancel(w http.ResponseWriter, r *http.Request) {
+	token := strings.TrimSpace(r.URL.Query().Get("token"))
+	if token == "" {
+		var body struct {
+			Token string `json:"token"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		token = strings.TrimSpace(body.Token)
+	}
+	if token == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
+		return
+	}
+	s.coinMu.Lock()
+	if s.coinSess != nil && s.coinSess.Token == token {
+		s.coinSess = nil
+	}
+	s.coinMu.Unlock()
+	writeJSON(w, struct {
+		Ok bool `json:"ok"`
+	}{Ok: true})
+}
+
+func (s *Server) handleCoinCommit(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Token string `json:"token"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	token := strings.TrimSpace(body.Token)
+	if token == "" {
+		token = strings.TrimSpace(r.URL.Query().Get("token"))
+	}
+	if token == "" {
+		http.Error(w, "missing token", http.StatusBadRequest)
+		return
+	}
+
+	now := time.Now().UTC()
+
+	s.coinMu.Lock()
+	sess := s.coinSess
+	if sess == nil || sess.Token != token {
+		s.coinMu.Unlock()
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if now.After(sess.ExpiresAt) {
+		s.coinSess = nil
+		s.coinMu.Unlock()
+		http.Error(w, "expired", http.StatusBadRequest)
+		return
+	}
+	s.coinSess = nil
+	s.coinMu.Unlock()
+
+	cur := s.coinCounter.Current()
+	var pulses uint64
+	if cur >= sess.BaseCount {
+		pulses = cur - sess.BaseCount
+	}
+	amount := int64(pulses) * int64(s.coinPesoPerPulse)
+	rates := s.getRates(r.Context())
+	mins, usedAmount := convertAmountToMinutes(rates, amount)
+	if mins <= 0 {
+		http.Error(w, "no credit", http.StatusBadRequest)
+		return
+	}
+
+	res, code, err := s.createAndConsumeMinutes(r.Context(), mins, sess.ClientIP)
+	if err != nil {
+		http.Error(w, "commit failed", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, struct {
+		Ok         bool      `json:"ok"`
+		Minutes    int       `json:"minutes"`
+		Amount     int64     `json:"amount"`
+		UsedAmount int64     `json:"used_amount"`
+		Voucher    string    `json:"voucher"`
+		EndAtUTC   time.Time `json:"end_at_utc"`
+		ClientIP   string    `json:"client_ip"`
+	}{
+		Ok:         true,
+		Minutes:    mins,
+		Amount:     amount,
+		UsedAmount: usedAmount,
+		Voucher:    code,
+		EndAtUTC:   res.Session.EndAt.UTC(),
+		ClientIP:   sess.ClientIP,
+	})
+}
+
+func (s *Server) getRates(ctx context.Context) []rate {
+	val, ok, err := s.store.GetSetting(ctx, "rates")
+	if err != nil {
+		ok = false
+	}
+	if !ok || strings.TrimSpace(val) == "" {
+		val = `[{"minutes":60,"price":10},{"minutes":180,"price":25},{"minutes":1440,"price":60}]`
+	}
+	var arr []rate
+	if err := json.Unmarshal([]byte(val), &arr); err != nil {
+		arr = nil
+	}
+	out := make([]rate, 0, len(arr))
+	for _, r := range arr {
+		if r.Minutes <= 0 || r.Price <= 0 {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Price < out[j].Price
+	})
+	return out
+}
+
+func convertAmountToMinutes(rates []rate, amount int64) (int, int64) {
+	if amount <= 0 || len(rates) == 0 {
+		return 0, 0
+	}
+	type r2 struct {
+		minutes int
+		cents   int64
+	}
+	tmp := make([]r2, 0, len(rates))
+	for _, r := range rates {
+		c := int64(r.Price*100 + 0.5)
+		if c <= 0 || r.Minutes <= 0 {
+			continue
+		}
+		tmp = append(tmp, r2{minutes: r.Minutes, cents: c})
+	}
+	if len(tmp) == 0 {
+		return 0, 0
+	}
+	sort.Slice(tmp, func(i, j int) bool { return tmp[i].cents > tmp[j].cents })
+
+	remaining := amount * 100
+	used := int64(0)
+	minutes := 0
+
+	for _, r := range tmp {
+		if remaining < r.cents {
+			continue
+		}
+		n := remaining / r.cents
+		if n <= 0 {
+			continue
+		}
+		remaining -= n * r.cents
+		used += n * r.cents
+		minutes += int(n) * r.minutes
+	}
+	return minutes, used / 100
+}
+
+func (s *Server) createAndConsumeMinutes(ctx context.Context, minutes int, ip string) (store.ConsumeVoucherResult, string, error) {
+	for i := 0; i < 5; i++ {
+		code, err := newVoucherCode(8)
+		if err != nil {
+			return store.ConsumeVoucherResult{}, "", err
+		}
+		if _, err := s.store.CreateVoucher(ctx, code, minutes); err != nil {
+			continue
+		}
+		res, err := s.consumeVoucher(ctx, code, "", ip)
+		if err != nil {
+			return store.ConsumeVoucherResult{}, "", err
+		}
+		return res, code, nil
+	}
+	return store.ConsumeVoucherResult{}, "", errors.New("could not create voucher")
 }
 
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {

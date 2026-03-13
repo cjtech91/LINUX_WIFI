@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"linux_wifi/internal/config"
+	"linux_wifi/internal/gpio"
 	"linux_wifi/internal/portal"
 	"linux_wifi/internal/store"
 )
@@ -51,6 +52,11 @@ func serve(args []string) {
 	allowMinutes := fs.Int("default-minutes", 60, "Default minutes if not provided")
 	adminUser := fs.String("admin-user", "", "Admin username for /admin (optional)")
 	adminPass := fs.String("admin-pass", "", "Admin password for /admin (optional)")
+	coinEnable := fs.Bool("coin-enable", true, "Enable coin insertion flow (GPIO pulse reader if available)")
+	coinPin := fs.Int("coin-pin", 0, "Coin GPIO pin (0 = auto-detect)")
+	coinEdge := fs.String("coin-edge", "", `Coin GPIO edge: rising|falling|both (empty = auto-detect)`)
+	coinPesoPerPulse := fs.Int("coin-peso-per-pulse", 1, "Peso value per pulse")
+	coinWindowSeconds := fs.Int("coin-window-seconds", 60, "Coin insertion window in seconds")
 	_ = fs.Parse(args)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -72,6 +78,25 @@ func serve(args []string) {
 		}
 	}
 
+	board := gpio.Detect()
+	pin := *coinPin
+	if pin == 0 {
+		pin = board.Config.CoinPin
+	}
+	edge := strings.TrimSpace(*coinEdge)
+	if edge == "" {
+		edge = board.Config.CoinPinEdge
+	}
+	if edge == "" {
+		edge = "rising"
+	}
+	var counter gpio.PulseCounter = gpio.DisabledPulseCounter{}
+	if *coinEnable {
+		if c, err := gpio.NewPulseCounter(pin, edge); err == nil {
+			counter = c
+		}
+	}
+
 	srv := portal.NewServer(portal.ServerDeps{
 		Store:          st,
 		Allowlister:    allowlister,
@@ -79,6 +104,19 @@ func serve(args []string) {
 		Title:          *portalTitle,
 		AdminUser:      *adminUser,
 		AdminPass:      *adminPass,
+		CoinCounter:    counter,
+		CoinPesoPerPulse: func() int {
+			if *coinPesoPerPulse <= 0 {
+				return 1
+			}
+			return *coinPesoPerPulse
+		}(),
+		CoinWindowSeconds: func() int {
+			if *coinWindowSeconds <= 0 {
+				return 60
+			}
+			return *coinWindowSeconds
+		}(),
 	})
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
