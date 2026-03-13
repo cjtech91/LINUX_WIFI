@@ -27,7 +27,9 @@ type ServerDeps struct {
 	Title             string
 	AdminUser         string
 	AdminPass         string
-	CoinCounter       gpio.PulseCounter
+	CoinEnable        bool
+	CoinPin           int
+	CoinEdge          string
 	CoinPesoPerPulse  int
 	CoinWindowSeconds int
 }
@@ -41,6 +43,9 @@ type Server struct {
 	adminUser        string
 	adminPass        string
 	adminTmpl        *template.Template
+	coinEnable       bool
+	coinPin          int
+	coinEdge         string
 	coinCounter      gpio.PulseCounter
 	coinPesoPerPulse int
 	coinWindow       time.Duration
@@ -66,10 +71,6 @@ func NewServer(d ServerDeps) *Server {
 	tmpl := template.Must(template.New("portal").Parse(portalHTML))
 	admin := template.Must(template.New("admin").Parse(adminHTML))
 
-	counter := d.CoinCounter
-	if counter == nil {
-		counter = gpio.DisabledPulseCounter{}
-	}
 	pesoPerPulse := d.CoinPesoPerPulse
 	if pesoPerPulse <= 0 {
 		pesoPerPulse = 1
@@ -88,7 +89,9 @@ func NewServer(d ServerDeps) *Server {
 		adminUser:        strings.TrimSpace(d.AdminUser),
 		adminPass:        strings.TrimSpace(d.AdminPass),
 		adminTmpl:        admin,
-		coinCounter:      counter,
+		coinEnable:       d.CoinEnable,
+		coinPin:          d.CoinPin,
+		coinEdge:         strings.TrimSpace(d.CoinEdge),
 		coinPesoPerPulse: pesoPerPulse,
 		coinWindow:       time.Duration(windowSec) * time.Second,
 	}
@@ -300,7 +303,11 @@ func (s *Server) handleClientRates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCoinStart(w http.ResponseWriter, r *http.Request) {
-	if !s.coinCounter.Enabled() {
+	if !s.coinEnable {
+		http.Error(w, "coin disabled", http.StatusBadRequest)
+		return
+	}
+	if !s.ensureCoinCounter() {
 		http.Error(w, "coin disabled", http.StatusBadRequest)
 		return
 	}
@@ -374,6 +381,10 @@ func (s *Server) handleCoinStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	if s.coinCounter == nil || !s.coinCounter.Enabled() {
+		http.Error(w, "coin disabled", http.StatusBadRequest)
+		return
+	}
 
 	secondsLeft := int64(sess.ExpiresAt.Sub(now).Truncate(time.Second).Seconds())
 	if secondsLeft < 0 {
@@ -422,6 +433,10 @@ func (s *Server) handleCoinCancel(w http.ResponseWriter, r *http.Request) {
 	if s.coinSess != nil && s.coinSess.Token == token {
 		s.coinSess = nil
 	}
+	if s.coinCounter != nil {
+		_ = s.coinCounter.Close()
+		s.coinCounter = nil
+	}
 	s.coinMu.Unlock()
 	writeJSON(w, struct {
 		Ok bool `json:"ok"`
@@ -453,12 +468,27 @@ func (s *Server) handleCoinCommit(w http.ResponseWriter, r *http.Request) {
 	}
 	if now.After(sess.ExpiresAt) {
 		s.coinSess = nil
+		if s.coinCounter != nil {
+			_ = s.coinCounter.Close()
+			s.coinCounter = nil
+		}
 		s.coinMu.Unlock()
 		http.Error(w, "expired", http.StatusBadRequest)
 		return
 	}
 	s.coinSess = nil
+	if s.coinCounter != nil {
+		defer func() {
+			_ = s.coinCounter.Close()
+			s.coinCounter = nil
+		}()
+	}
 	s.coinMu.Unlock()
+
+	if s.coinCounter == nil || !s.coinCounter.Enabled() {
+		http.Error(w, "coin disabled", http.StatusBadRequest)
+		return
+	}
 
 	cur := s.coinCounter.Current()
 	var pulses uint64
@@ -496,6 +526,34 @@ func (s *Server) handleCoinCommit(w http.ResponseWriter, r *http.Request) {
 		EndAtUTC:   res.Session.EndAt.UTC(),
 		ClientIP:   sess.ClientIP,
 	})
+}
+
+func (s *Server) ensureCoinCounter() bool {
+	s.coinMu.Lock()
+	defer s.coinMu.Unlock()
+
+	if s.coinCounter != nil && s.coinCounter.Enabled() {
+		return true
+	}
+	if !s.coinEnable {
+		return false
+	}
+	edge := strings.TrimSpace(s.coinEdge)
+	if edge == "" {
+		edge = "rising"
+	}
+	c, err := gpio.NewPulseCounter(s.coinPin, edge)
+	if err != nil {
+		s.coinCounter = nil
+		return false
+	}
+	if !c.Enabled() {
+		_ = c.Close()
+		s.coinCounter = nil
+		return false
+	}
+	s.coinCounter = c
+	return true
 }
 
 func (s *Server) getRates(ctx context.Context) []rate {

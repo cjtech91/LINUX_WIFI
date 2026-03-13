@@ -90,13 +90,6 @@ func serve(args []string) {
 	if edge == "" {
 		edge = "rising"
 	}
-	var counter gpio.PulseCounter = gpio.DisabledPulseCounter{}
-	if *coinEnable {
-		if c, err := gpio.NewPulseCounter(pin, edge); err == nil {
-			counter = c
-		}
-	}
-
 	srv := portal.NewServer(portal.ServerDeps{
 		Store:          st,
 		Allowlister:    allowlister,
@@ -104,7 +97,9 @@ func serve(args []string) {
 		Title:          *portalTitle,
 		AdminUser:      *adminUser,
 		AdminPass:      *adminPass,
-		CoinCounter:    counter,
+		CoinEnable:     *coinEnable,
+		CoinPin:        pin,
+		CoinEdge:       edge,
 		CoinPesoPerPulse: func() int {
 			if *coinPesoPerPulse <= 0 {
 				return 1
