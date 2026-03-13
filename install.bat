@@ -12,14 +12,14 @@ if errorlevel 1 (
 
 set "DEFAULT_REPO=https://github.com/cjtech91/LINUX_WIFI.git"
 set "DEFAULT_USER=root"
-set "DEFAULT_WAN_IF=end0"
-set "DEFAULT_VLAN_ID=10"
+set "DEFAULT_WAN_IF=AUTO"
+set "DEFAULT_VLAN_ID=13"
 set "DEFAULT_USB_IF="
 set "DEFAULT_LAN_IP=10.0.0.1"
 set "DEFAULT_LAN_PREFIX=24"
 set "DEFAULT_LAN_CIDR=10.0.0.0/24"
-set "DEFAULT_DHCP_START=10.0.0.50"
-set "DEFAULT_DHCP_END=10.0.0.200"
+set "DEFAULT_DHCP_START=10.0.0.5"
+set "DEFAULT_DHCP_END=10.0.0.250"
 
 echo.
 echo === PiSoWiFi One-Click Installer (SSH) ===
@@ -37,7 +37,7 @@ if "%SSH_USER%"=="" set "SSH_USER=%DEFAULT_USER%"
 set /p REPO_URL=Git repo URL [%DEFAULT_REPO%] :
 if "%REPO_URL%"=="" set "REPO_URL=%DEFAULT_REPO%"
 
-set /p WAN_IF=WAN interface (uplink) [%DEFAULT_WAN_IF%] :
+set /p WAN_IF=WAN interface (uplink) [AUTO] :
 if "%WAN_IF%"=="" set "WAN_IF=%DEFAULT_WAN_IF%"
 
 set /p VLAN_ID=Client VLAN ID [%DEFAULT_VLAN_ID%] :
@@ -77,6 +77,15 @@ set "TMP_SCRIPT=%TEMP%\pisowifi_install_%RANDOM%.sh"
   echo DHCP_END="%DHCP_END%"
   echo REPO_URL="%REPO_URL%"
   echo.
+  echo if [ -z "$WAN_IF" ] ^|^| [ "$WAN_IF" = "AUTO" ]; then
+  echo ^  WAN_IF="$(ip route show default 2^>^/dev/null ^| awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
+  echo fi
+  echo if [ -z "$WAN_IF" ]; then
+  echo ^  echo "ERROR: Could not auto-detect WAN interface. Set it manually in install.bat prompt." 1^>^&2
+  echo ^  exit 1
+  echo fi
+  echo echo "Detected WAN interface: $WAN_IF"
+  echo.
   echo echo "== Installing packages =="
   echo sudo apt update
   echo sudo apt install -y git golang-go hostapd dnsmasq nftables iproute2 nginx
@@ -88,7 +97,7 @@ set "TMP_SCRIPT=%TEMP%\pisowifi_install_%RANDOM%.sh"
   echo echo "== Getting source code =="
   echo sudo install -d -m 0755 /opt
   echo if [ -d /opt/pisowifi/.git ]; then
-  echo ^  cd /opt/pisowifi ^&^& sudo git pull --rebase
+  echo ^  cd /opt/pisowifi ^&^& git pull --rebase
   echo else
   echo ^  sudo git clone "$REPO_URL" /opt/pisowifi
   echo fi
