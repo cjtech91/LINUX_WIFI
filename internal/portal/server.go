@@ -83,6 +83,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/logs", s.handleAdminLogs)
 	mux.HandleFunc("GET /api/admin/rates", s.handleAdminGetRates)
 	mux.HandleFunc("POST /api/admin/rates", s.handleAdminSetRates)
+	mux.HandleFunc("GET /api/admin/subvendo/devices", s.handleAdminSubVendoDevices)
 }
 
 func (s *Server) handlePortal(w http.ResponseWriter, r *http.Request) {
@@ -501,10 +502,51 @@ func (s *Server) handleAdminSetRates(w http.ResponseWriter, r *http.Request) {
 		Ok bool `json:"ok"`
 	}{Ok: true})
 }
+
+func (s *Server) handleAdminSubVendoDevices(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	now := time.Now().UTC()
+	_, gw := readDefaultRoute()
+	board := gpio.Detect()
+
+	type device struct {
+		Name          string `json:"name"`
+		Mac           string `json:"mac"`
+		ID            string `json:"id"`
+		License       string `json:"license"`
+		Status        string `json:"status"`
+		Interface     string `json:"interface"`
+		Version       string `json:"version"`
+		LastActiveUTC string `json:"last_active_utc"`
+		Info          string `json:"info"`
+	}
+
+	items := []device{
+		{
+			Name:          "Main Vendo",
+			Mac:           "",
+			ID:            "MAIN",
+			License:       "ACTIVE",
+			Status:        "Online Now",
+			Interface:     "br10",
+			Version:       "v1",
+			LastActiveUTC: now.Format(time.RFC3339),
+			Info:          board.Model + " • GW " + gw,
+		},
+	}
+	writeJSON(w, struct {
+		Items []device `json:"items"`
+	}{
+		Items: items,
+	})
+}
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if s.adminUser == "" {
 		return true
 	}
+	u, p, ok := r.BasicAuth()
 	u, p, ok := r.BasicAuth()
 	if !ok || u != s.adminUser || p != s.adminPass {
 		w.Header().Set("WWW-Authenticate", `Basic realm="admin"`)

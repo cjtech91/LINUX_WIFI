@@ -248,6 +248,24 @@ const adminHTML = `<!doctype html>
         document.getElementById('pageTable').style.display = '';
       }
 
+      function setTableNodes(headCols, rowBuilder) {
+        const head = document.getElementById('pageTableHead');
+        const body = document.getElementById('pageTableBody');
+        head.innerHTML = '';
+        body.innerHTML = '';
+
+        const trh = document.createElement('tr');
+        headCols.forEach(c => {
+          const th = document.createElement('th');
+          th.textContent = c;
+          trh.appendChild(th);
+        });
+        head.appendChild(trh);
+
+        rowBuilder(body);
+        document.getElementById('pageTable').style.display = '';
+      }
+
       async function loadInterfaces() {
         document.getElementById('pageTable').style.display = 'none';
         document.getElementById('pageSectionHint').textContent = 'Loading interfaces...';
@@ -334,6 +352,9 @@ const adminHTML = `<!doctype html>
           document.getElementById('pageSection').style.display = '';
           document.getElementById('pageSectionTitle').textContent = nice;
           document.getElementById('pageSectionHint').textContent = '';
+          document.getElementById('pageTable').style.display = 'none';
+          document.getElementById('pageTableHead').innerHTML = '';
+          document.getElementById('pageTableBody').innerHTML = '';
           if (page === 'interfaces') {
             loadInterfaces();
           } else if (page === 'vouchers') {
@@ -374,55 +395,71 @@ const adminHTML = `<!doctype html>
       setInterval(fetchSummary, 5000);
 
       async function loadSubVendo() {
-        const sec = document.getElementById('pageSection');
         const hint = document.getElementById('pageSectionHint');
         hint.textContent = 'Registered devices';
-        const wrap = document.createElement('div');
-        wrap.className = 'row';
-        const card = document.createElement('div');
-        card.className = 'card span-12';
-        card.innerHTML =
-          '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px">' +
-          '  <div><strong>Main Vendo</strong> <span class="muted" style="margin-left:8px">ACTIVE • Online Now</span></div>' +
-          '  <div class="row">' +
-          '    <button class="btn" id="ratesBtn">Rates</button>' +
-          '    <button class="btn" id="freeBtn">Free Time</button>' +
-          '  </div>' +
-          '</div>' +
-          '<div id="ratesList" class="muted" style="margin-top:10px"></div>' +
-          '<div id="actionOut" style="margin-top:10px;color:#10b981"></div>';
-        wrap.appendChild(card);
-        sec.appendChild(wrap);
-        document.getElementById('pageTable').style.display = 'none';
-
-        async function refreshRates() {
-          try {
-            const res = await fetch('/api/admin/rates', {cache:'no-store'});
-            if (!res.ok) throw new Error('bad');
-            const arr = await res.json();
-            const text = Array.isArray(arr) ? arr.map(x => (x.minutes + 'm → ₱' + x.price)).join(', ') : '';
-            document.getElementById('ratesList').textContent = text || 'No rates configured';
-          } catch {
-            document.getElementById('ratesList').textContent = 'Failed to load rates';
-          }
+        let items = [];
+        try {
+          const res = await fetch('/api/admin/subvendo/devices', {cache:'no-store'});
+          if (!res.ok) throw new Error('bad');
+          const data = await res.json();
+          items = data.items || [];
+        } catch {
+          items = [];
         }
-        document.getElementById('ratesBtn').addEventListener('click', async () => {
-          openRatesModal();
-        });
-        document.getElementById('freeBtn').addEventListener('click', async () => {
-          const m = prompt('Free time minutes for voucher?');
-          const mins = parseInt((m || '').trim(), 10);
-          if (!mins || mins <= 0) return;
-          try {
-            const res = await fetch('/api/v1/vouchers', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({minutes: mins})});
-            if (!res.ok) throw new Error('bad');
-            const v = await res.json();
-            document.getElementById('actionOut').textContent = 'Free-time voucher: ' + v.code + ' ('+v.minutes+' mins)';
-          } catch {
-            document.getElementById('actionOut').textContent = 'Failed to create free-time voucher';
+
+        setTableNodes(
+          ['Name', 'Mac', 'ID', 'License', 'Status', 'Interface', 'Version', 'Last Active', 'Info', 'Actions'],
+          (tbody) => {
+            items.forEach((d) => {
+              const tr = document.createElement('tr');
+              function tdText(v) {
+                const td = document.createElement('td');
+                td.textContent = v || '';
+                return td;
+              }
+
+              tr.appendChild(tdText(d.name));
+              tr.appendChild(tdText(d.mac));
+              tr.appendChild(tdText(d.id));
+              tr.appendChild(tdText(d.license));
+              tr.appendChild(tdText(d.status));
+              tr.appendChild(tdText(d.interface));
+              tr.appendChild(tdText(d.version));
+              tr.appendChild(tdText(d.last_active_utc));
+              tr.appendChild(tdText(d.info));
+
+              const tdAct = document.createElement('td');
+              const ratesBtn = document.createElement('button');
+              ratesBtn.className = 'btn';
+              ratesBtn.textContent = 'Rates';
+              ratesBtn.addEventListener('click', () => openRatesModal());
+
+              const freeBtn = document.createElement('button');
+              freeBtn.className = 'btn';
+              freeBtn.style.marginLeft = '6px';
+              freeBtn.textContent = 'Free Time';
+              freeBtn.addEventListener('click', async () => {
+                const m = prompt('Free time minutes for voucher?');
+                const mins = parseInt((m || '').trim(), 10);
+                if (!mins || mins <= 0) return;
+                try {
+                  const res = await fetch('/api/v1/vouchers', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({minutes: mins})});
+                  if (!res.ok) throw new Error('bad');
+                  const v = await res.json();
+                  alert('Voucher: ' + v.code + ' (' + v.minutes + ' mins)');
+                } catch {
+                  alert('Failed to create voucher');
+                }
+              });
+
+              tdAct.appendChild(ratesBtn);
+              tdAct.appendChild(freeBtn);
+              tr.appendChild(tdAct);
+
+              tbody.appendChild(tr);
+            });
           }
-        });
-        refreshRates();
+        );
       }
 
       function formatDuration(mins){
