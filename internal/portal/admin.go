@@ -174,7 +174,11 @@ const adminHTML = `<!doctype html>
             document.getElementById('boardModel').textContent = data.board_model ?? '-';
             if (data.gpio) {
               const d = data.gpio.disabled ? 'disabled' : 'enabled';
-              document.getElementById('gpioInfo').textContent = `GPIO ${d} • coin ${data.gpio.coin_pin} (${data.gpio.coin_edge}) • bill ${data.gpio.bill_pin} (${data.gpio.bill_edge}) • relay ${data.gpio.relay_pin} (${data.gpio.relay_active})`;
+              document.getElementById('gpioInfo').textContent =
+                'GPIO ' + d +
+                ' • coin ' + data.gpio.coin_pin + ' (' + data.gpio.coin_edge + ')' +
+                ' • bill ' + data.gpio.bill_pin + ' (' + data.gpio.bill_edge + ')' +
+                ' • relay ' + data.gpio.relay_pin + ' (' + data.gpio.relay_active + ')';
             }
           }
         } catch (e) {
