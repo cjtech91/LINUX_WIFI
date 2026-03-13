@@ -73,6 +73,10 @@ const adminHTML = `<!doctype html>
       .btn.primary:hover{background:#2563eb}
       .btn.danger{background:#7f1d1d;border-color:#991b1b}
       .btn.danger:hover{background:#9b2222}
+      .formRow{display:flex;gap:10px;align-items:center;margin:8px 0}
+      .formRow label{width:160px;color:var(--muted);font-size:14px}
+      .formRow input[type="text"], .formRow input[type="number"]{flex:1;min-width:0;border:1px solid #0b152b;background:#141b2a;color:var(--text);border-radius:8px;padding:8px}
+      .formGrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
     </style>
   </head>
   <body>
@@ -480,22 +484,54 @@ const adminHTML = `<!doctype html>
             render();
           } catch {}
         }
-        modal.querySelector('#addRateBtn').addEventListener('click', async () => {
-          const amount = prompt('Amount in pesos (e.g., 10)');
-          const price = parseFloat((amount||'').trim());
-          if (isNaN(price) || price<=0) return;
-          const dur = prompt('Duration in minutes (e.g., 60 for 1h)');
-          const minutes = parseInt((dur||'').trim(), 10);
-          if (isNaN(minutes) || minutes<=0) return;
-          data.push({minutes, price});
-          await save();
-        });
         modal.querySelector('#closeRateBtn').addEventListener('click', () => {
           document.body.removeChild(backdrop);
         });
         backdrop.addEventListener('click', (e) => { if (e.target === backdrop) document.body.removeChild(backdrop); });
         render();
       }
-    </script>
-  </body>
-  </html>`
+
+      function openRateEditor(onSave){
+        const eb = document.createElement('div');
+        eb.className = 'backdrop';
+        eb.style.display = 'flex';
+        eb.style.zIndex = '60';
+        const em = document.createElement('div');
+        em.className = 'modal';
+        em.innerHTML =
+          '<div class="modalHeader">Manage Rate</div>' +
+          '<div class="modalBody">' +
+          '  <div class="formRow"><label>Coin Amount (₱)</label><input id="rateAmount" type="number" min="1" step="0.01" placeholder="10"></div>' +
+          '  <div class="formRow"><label>Duration</label>' +
+          '    <div class="formGrid" style="flex:1">' +
+          '      <input id="durDays" type="number" min="0" step="1" placeholder="0"><span class="muted" style="align-self:center">Days</span>' +
+          '      <input id="durHours" type="number" min="0" max="23" step="1" placeholder="0"><span class="muted" style="align-self:center">Hrs</span>' +
+          '      <input id="durMins" type="number" min="0" max="59" step="1" placeholder="15"><span class="muted" style="align-self:center">Mins</span>' +
+          '    </div>' +
+          '  </div>' +
+          '  <div class="formRow"><label>Upload (Mbps)</label><input id="upMbps" type="number" min="0" step="0.1" placeholder="5"></div>' +
+          '  <div class="formRow"><label>Download (Mbps)</label><input id="downMbps" type="number" min="0" step="0.1" placeholder="5"></div>' +
+          '  <div class="formRow"><label></label><label style="display:flex;align-items:center;gap:8px"><input id="allowPause" type="checkbox" checked> <span>Allow Pause?</span></label></div>' +
+          '</div>' +
+          '<div class="modalFooter"><button class="btn" id="cancelRate">Cancel</button><button class="btn primary" id="saveRate">Save Rate</button></div>';
+        eb.appendChild(em);
+        document.body.appendChild(eb);
+        function close(){ document.body.removeChild(eb); }
+        em.querySelector('#cancelRate').addEventListener('click', close);
+        eb.addEventListener('click', (e)=>{ if (e.target===eb) close(); });
+        em.querySelector('#saveRate').addEventListener('click', async ()=>{
+          const price = parseFloat((document.getElementById('rateAmount').value||'').trim());
+          const d = parseInt((document.getElementById('durDays').value||'0').trim(),10) || 0;
+          const h = parseInt((document.getElementById('durHours').value||'0').trim(),10) || 0;
+          const m = parseInt((document.getElementById('durMins').value||'0').trim(),10) || 0;
+          const up = parseFloat((document.getElementById('upMbps').value||'0').trim()) || 0;
+          const down = parseFloat((document.getElementById('downMbps').value||'0').trim()) || 0;
+          const pause = !!document.getElementById('allowPause').checked;
+          if (!(price>0)) return;
+          const minutes = d*1440 + h*60 + m;
+          if (!(minutes>0)) return;
+          const rate = {price:price, minutes:minutes, up_mbps:up, down_mbps:down, pause:pause};
+          if (onSave) await onSave(rate);
+          close();
+        });
+      }
