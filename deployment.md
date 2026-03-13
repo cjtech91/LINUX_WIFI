@@ -24,7 +24,7 @@ Recommended (simplest): use `git clone` from inside the SSH session.
 sudo apt update
 sudo apt install -y git
 cd /opt
-sudo git clone <YOUR_REPO_URL> pisowifi
+sudo git clone https://github.com/cjtech91/LINUX_WIFI.git pisowifi
 sudo chown -R "$USER":"$USER" /opt/pisowifi
 ```
 
