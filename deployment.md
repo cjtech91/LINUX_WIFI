@@ -18,16 +18,48 @@ In MobaXterm, open an SSH session to your device:
 
 ## 2) Get the source code onto the device (SSH-only)
 
-Recommended (simplest): use `git clone` from inside the SSH session.
+Choose one of the following methods that avoids username/password prompts:
 
+A) Upload over SSH (no GitHub at all)
+
+1. In MobaXterm, open your SSH session to the device.
+2. Create a target directory:
+   ```bash
+   sudo mkdir -p /opt/pisowifi
+   sudo chown "$USER":"$USER" /opt/pisowifi
+   ```
+3. Use MobaXterm’s SFTP side panel (left) to drag-and-drop your local project into `/opt/pisowifi`.
+4. Verify on the device:
+   ```bash
+   ls -la /opt/pisowifi
+   ```
+
+B) Clone with GitHub SSH deploy key (no password prompts)
+
+1. Generate an SSH key on the device:
+   ```bash
+   ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+   ssh-keyscan github.com >> ~/.ssh/known_hosts
+   cat ~/.ssh/id_ed25519.pub
+   ```
+2. Copy the printed public key and add it as a “Deploy key” (Read-only) in your GitHub repo settings.
+3. Install git and clone over SSH:
+   ```bash
+   sudo apt update
+   sudo apt install -y git
+   cd /opt
+   git clone git@github.com:cjtech91/LINUX_WIFI.git pisowifi
+   ```
+
+C) Public repo over HTTPS (no auth needed)
+
+If the repository is public, you can clone without credentials:
 ```bash
 sudo apt update
 sudo apt install -y git
 cd /opt
-sudo git clone https://github.com/cjtech91/LINUX_WIFI.git pisowifi
+git clone https://github.com/cjtech91/LINUX_WIFI.git pisowifi
 ```
-
-If your code is private, use a private GitHub/GitLab repo and clone using HTTPS with a token, or configure SSH keys.
 
 ## 3) Install Go on the device and build (SSH-only)
 
