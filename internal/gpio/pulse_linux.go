@@ -4,11 +4,11 @@ package gpio
 
 import (
 	"fmt"
+	"golang.org/x/sys/unix"
 	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"time"
 )
 
@@ -78,15 +78,15 @@ func (c *SysfsPulseCounter) Close() error {
 func (c *SysfsPulseCounter) loop(edge string) {
 	buf := make([]byte, 8)
 	last := byte(0)
-	_, _ = syscall.Seek(c.fd, 0, 0)
-	n, _ := syscall.Read(c.fd, buf)
+	_, _ = unix.Seek(c.fd, 0, 0)
+	n, _ := unix.Read(c.fd, buf)
 	if n > 0 {
 		last = buf[0]
 	}
 
-	pfd := []syscall.PollFd{{
+	pfd := []unix.PollFd{{
 		Fd:     int32(c.fd),
-		Events: syscall.POLLPRI,
+		Events: unix.POLLPRI,
 	}}
 
 	for {
@@ -97,20 +97,20 @@ func (c *SysfsPulseCounter) loop(edge string) {
 		}
 
 		pfd[0].Revents = 0
-		_, err := syscall.Poll(pfd, 1000)
+		_, err := unix.Poll(pfd, 1000)
 		if err != nil {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
-		if (pfd[0].Revents & syscall.POLLPRI) == 0 {
-			if (pfd[0].Revents & (syscall.POLLERR | syscall.POLLNVAL)) != 0 {
+		if (pfd[0].Revents & unix.POLLPRI) == 0 {
+			if (pfd[0].Revents & (unix.POLLERR | unix.POLLNVAL)) != 0 {
 				time.Sleep(100 * time.Millisecond)
 			}
 			continue
 		}
 
-		_, _ = syscall.Seek(c.fd, 0, 0)
-		n, err = syscall.Read(c.fd, buf)
+		_, _ = unix.Seek(c.fd, 0, 0)
+		n, err = unix.Read(c.fd, buf)
 		if err != nil || n == 0 {
 			continue
 		}
