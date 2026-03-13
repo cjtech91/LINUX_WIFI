@@ -25,7 +25,6 @@ sudo apt update
 sudo apt install -y git
 cd /opt
 sudo git clone https://github.com/cjtech91/LINUX_WIFI.git pisowifi
-sudo chown -R "$USER":"$USER" /opt/pisowifi
 ```
 
 If your code is private, use a private GitHub/GitLab repo and clone using HTTPS with a token, or configure SSH keys.
