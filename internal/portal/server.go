@@ -515,6 +515,20 @@ func (s *Server) consumeVoucher(ctx context.Context, code string, mac string, ip
 }
 
 func clientIPFromRequest(r *http.Request) string {
+	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
+		parts := strings.Split(xff, ",")
+		if len(parts) > 0 {
+			ip := strings.TrimSpace(parts[0])
+			if parsed := net.ParseIP(ip); parsed != nil {
+				return parsed.String()
+			}
+		}
+	}
+	if xr := strings.TrimSpace(r.Header.Get("X-Real-IP")); xr != "" {
+		if parsed := net.ParseIP(xr); parsed != nil {
+			return parsed.String()
+		}
+	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err == nil && host != "" {
 		return host
