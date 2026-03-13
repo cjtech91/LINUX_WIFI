@@ -1,0 +1,14 @@
+[Unit]
+Description=PiSoWiFi Portal
+Requires=pisowifi-net.service
+After=pisowifi-net.service network-online.target nftables.service nginx.service dnsmasq.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/pisowifi serve --listen 127.0.0.1:8080 --db /var/lib/pisowifi/pisowifi.db --nft-enable --nft-table "inet pisowifi" --nft-allowed4-set allowed4 --title "PiSoWiFi"
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+

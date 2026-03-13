@@ -238,6 +238,7 @@ Enable and start:
 
 ```bash
 sudo systemctl daemon-reload
+sudo systemctl enable --now pisowifi-net
 sudo systemctl enable --now pisowifi
 sudo systemctl status pisowifi --no-pager
 ```
