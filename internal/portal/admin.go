@@ -535,3 +535,6 @@ const adminHTML = `<!doctype html>
           close();
         });
       }
+    </script>
+  </body>
+</html>`
