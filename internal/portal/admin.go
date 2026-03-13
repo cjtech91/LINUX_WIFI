@@ -45,6 +45,7 @@ const adminHTML = `<!doctype html>
       .span-3{grid-column:span 3}
       .span-4{grid-column:span 4}
       .span-6{grid-column:span 6}
+      .span-12{grid-column:span 12}
       .title{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
       .value{font-size:28px;font-weight:800;margin-top:6px}
       .row{display:flex;gap:8px;margin-top:10px}
@@ -148,14 +149,15 @@ const adminHTML = `<!doctype html>
         </section>
 
         <section class="grid" id="pageSection" style="display:none">
-          <div class="card span-6">
+          <div class="card span-12">
             <div class="title" id="pageSectionTitle">Page</div>
-            <div class="muted" id="pageSectionHint" style="margin-top:10px">Coming soon</div>
-          </div>
-          <div class="card span-6">
-            <div class="title">Board</div>
-            <div class="muted" id="boardModel" style="margin-top:10px">-</div>
-            <div class="muted" id="gpioInfo" style="margin-top:8px">-</div>
+            <div class="muted" id="pageSectionHint" style="margin-top:10px"></div>
+            <div style="margin-top:12px; overflow:auto">
+              <table class="table" id="pageTable" style="display:none">
+                <thead id="pageTableHead"></thead>
+                <tbody id="pageTableBody"></tbody>
+              </table>
+            </div>
           </div>
         </section>
       </main>
@@ -205,6 +207,100 @@ const adminHTML = `<!doctype html>
         tr.appendChild(td1); tr.appendChild(td2); tb.prepend(tr);
       }
       document.getElementById('loadTime').textContent = new Date().toISOString();
+
+      function setTable(headCols, rows) {
+        const head = document.getElementById('pageTableHead');
+        const body = document.getElementById('pageTableBody');
+        head.innerHTML = '';
+        body.innerHTML = '';
+
+        const trh = document.createElement('tr');
+        headCols.forEach(c => {
+          const th = document.createElement('th');
+          th.textContent = c;
+          trh.appendChild(th);
+        });
+        head.appendChild(trh);
+
+        rows.forEach(r => {
+          const tr = document.createElement('tr');
+          r.forEach(cell => {
+            const td = document.createElement('td');
+            td.textContent = cell;
+            tr.appendChild(td);
+          });
+          body.appendChild(tr);
+        });
+
+        document.getElementById('pageTable').style.display = '';
+      }
+
+      async function loadInterfaces() {
+        document.getElementById('pageTable').style.display = 'none';
+        document.getElementById('pageSectionHint').textContent = 'Loading interfaces...';
+        try {
+          const res = await fetch('/api/admin/interfaces', {cache:'no-store'});
+          if (!res.ok) throw new Error('bad');
+          const data = await res.json();
+          const rows = (data.interfaces || []).map(i => ([
+            i.name || '',
+            (i.flags || []).join(' '),
+            String(i.mtu ?? ''),
+            i.hardware_addr || '',
+            (i.addrs || []).join(', '),
+          ]));
+          document.getElementById('pageSectionHint').textContent =
+            'Default: ' + (data.default_interface || '-') + ' via ' + (data.default_gateway || '-');
+          setTable(['Name', 'Flags', 'MTU', 'MAC', 'Addresses'], rows);
+        } catch (e) {
+          document.getElementById('pageSectionHint').textContent = 'Failed to load interfaces';
+        }
+      }
+
+      async function loadVouchers() {
+        document.getElementById('pageTable').style.display = 'none';
+        document.getElementById('pageSectionHint').textContent = 'Loading vouchers...';
+        try {
+          const res = await fetch('/api/admin/vouchers?limit=200', {cache:'no-store'});
+          if (!res.ok) throw new Error('bad');
+          const data = await res.json();
+          const items = data.items || [];
+          const rows = items.map(v => ([
+            v.code || '',
+            String(v.minutes ?? ''),
+            v.created_at_utc || '',
+            v.used_at_utc || '',
+            v.used_by_ip || '',
+            v.used_by_mac || '',
+          ]));
+          document.getElementById('pageSectionHint').textContent = 'Latest vouchers (most recent first)';
+          setTable(['Code', 'Minutes', 'Created (UTC)', 'Used (UTC)', 'Used IP', 'Used MAC'], rows);
+        } catch (e) {
+          document.getElementById('pageSectionHint').textContent = 'Failed to load vouchers';
+        }
+      }
+
+      async function loadLogs() {
+        document.getElementById('pageTable').style.display = 'none';
+        document.getElementById('pageSectionHint').textContent = 'Loading logs...';
+        try {
+          const res = await fetch('/api/admin/logs?limit=200', {cache:'no-store'});
+          if (!res.ok) throw new Error('bad');
+          const data = await res.json();
+          const items = data.items || [];
+          const rows = items.map(e => ([
+            e.time_utc || '',
+            e.type || '',
+            e.message || '',
+            e.client_ip || '',
+          ]));
+          document.getElementById('pageSectionHint').textContent = 'Latest events (DB-derived)';
+          setTable(['Time (UTC)', 'Type', 'Message', 'Client IP'], rows);
+        } catch (e) {
+          document.getElementById('pageSectionHint').textContent = 'Failed to load logs';
+        }
+      }
+
       function setPageFromQuery() {
         const params = new URLSearchParams(window.location.search);
         const page = (params.get('page') || '{{.Page}}' || 'dashboard').toLowerCase();
@@ -224,7 +320,16 @@ const adminHTML = `<!doctype html>
           document.getElementById('dashboardSection').style.display = 'none';
           document.getElementById('pageSection').style.display = '';
           document.getElementById('pageSectionTitle').textContent = nice;
-          document.getElementById('pageSectionHint').textContent = 'Coming soon';
+          document.getElementById('pageSectionHint').textContent = '';
+          if (page === 'interfaces') {
+            loadInterfaces();
+          } else if (page === 'vouchers') {
+            loadVouchers();
+          } else if (page === 'logs') {
+            loadLogs();
+          } else {
+            document.getElementById('pageSectionHint').textContent = 'Coming soon';
+          }
         }
       }
 

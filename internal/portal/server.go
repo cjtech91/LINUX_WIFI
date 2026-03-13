@@ -9,6 +9,9 @@ import (
 	"html/template"
 	"net"
 	"net/http"
+	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,6 +78,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	mux.HandleFunc("GET /admin", s.handleAdmin)
 	mux.HandleFunc("GET /api/admin/summary", s.handleAdminSummary)
+	mux.HandleFunc("GET /api/admin/interfaces", s.handleAdminInterfaces)
+	mux.HandleFunc("GET /api/admin/vouchers", s.handleAdminVouchers)
+	mux.HandleFunc("GET /api/admin/logs", s.handleAdminLogs)
 }
 
 func (s *Server) handlePortal(w http.ResponseWriter, r *http.Request) {
@@ -240,13 +246,8 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if s.adminUser != "" {
-		u, p, ok := r.BasicAuth()
-		if !ok || u != s.adminUser || p != s.adminPass {
-			w.Header().Set("WWW-Authenticate", `Basic realm="admin"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if !s.requireAdmin(w, r) {
+		return
 	}
 	page := strings.TrimSpace(r.URL.Query().Get("page"))
 	if page == "" {
@@ -264,13 +265,8 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdminSummary(w http.ResponseWriter, r *http.Request) {
-	if s.adminUser != "" {
-		u, p, ok := r.BasicAuth()
-		if !ok || u != s.adminUser || p != s.adminPass {
-			w.Header().Set("WWW-Authenticate", `Basic realm="admin"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
+	if !s.requireAdmin(w, r) {
+		return
 	}
 	now := time.Now().UTC()
 	active, _ := s.store.CountActiveSessions(r.Context(), now)
@@ -307,6 +303,196 @@ func (s *Server) handleAdminSummary(w http.ResponseWriter, r *http.Request) {
 			Relay:    board.Config.RelayPinActive,
 		},
 	})
+}
+
+func (s *Server) handleAdminInterfaces(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	type iface struct {
+		Name         string   `json:"name"`
+		Index        int      `json:"index"`
+		MTU          int      `json:"mtu"`
+		HardwareAddr string   `json:"hardware_addr,omitempty"`
+		Flags        []string `json:"flags"`
+		Addrs        []string `json:"addrs"`
+	}
+	nifs, err := net.Interfaces()
+	if err != nil {
+		http.Error(w, "interfaces failed", http.StatusInternalServerError)
+		return
+	}
+	out := make([]iface, 0, len(nifs))
+	for _, ni := range nifs {
+		addrs, _ := ni.Addrs()
+		addrStrings := make([]string, 0, len(addrs))
+		for _, a := range addrs {
+			addrStrings = append(addrStrings, a.String())
+		}
+		flags := strings.Fields(ni.Flags.String())
+		out = append(out, iface{
+			Name:         ni.Name,
+			Index:        ni.Index,
+			MTU:          ni.MTU,
+			HardwareAddr: ni.HardwareAddr.String(),
+			Flags:        flags,
+			Addrs:        addrStrings,
+		})
+	}
+	defIface, defGW := readDefaultRoute()
+	writeJSON(w, struct {
+		DefaultInterface string  `json:"default_interface,omitempty"`
+		DefaultGateway   string  `json:"default_gateway,omitempty"`
+		Interfaces       []iface `json:"interfaces"`
+	}{
+		DefaultInterface: defIface,
+		DefaultGateway:   defGW,
+		Interfaces:       out,
+	})
+}
+
+func (s *Server) handleAdminVouchers(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	limit := 100
+	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+	vouchers, err := s.store.ListVouchers(r.Context(), limit)
+	if err != nil {
+		http.Error(w, "vouchers failed", http.StatusInternalServerError)
+		return
+	}
+	type voucherRow struct {
+		Code         string     `json:"code"`
+		Minutes      int        `json:"minutes"`
+		CreatedAtUTC time.Time  `json:"created_at_utc"`
+		UsedAtUTC    *time.Time `json:"used_at_utc,omitempty"`
+		UsedByIP     string     `json:"used_by_ip,omitempty"`
+		UsedByMAC    string     `json:"used_by_mac,omitempty"`
+	}
+	rows := make([]voucherRow, 0, len(vouchers))
+	for _, v := range vouchers {
+		row := voucherRow{
+			Code:         v.Code,
+			Minutes:      v.Minutes,
+			CreatedAtUTC: v.CreatedAt.UTC(),
+			UsedByIP:     v.UsedByIP.String,
+			UsedByMAC:    v.UsedByMAC.String,
+		}
+		if v.UsedAt.Valid {
+			t := v.UsedAt.Time.UTC()
+			row.UsedAtUTC = &t
+		}
+		rows = append(rows, row)
+	}
+	writeJSON(w, struct {
+		Items []voucherRow `json:"items"`
+	}{
+		Items: rows,
+	})
+}
+
+func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	limit := 100
+	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 1000 {
+			limit = n
+		}
+	}
+	vouchers, _ := s.store.ListVouchers(r.Context(), limit)
+	sessions, _ := s.store.ListSessions(r.Context(), limit)
+	type event struct {
+		TimeUTC  time.Time `json:"time_utc"`
+		Type     string    `json:"type"`
+		Message  string    `json:"message"`
+		ClientIP string    `json:"client_ip,omitempty"`
+	}
+	evs := make([]event, 0, len(vouchers)+len(sessions))
+	for _, v := range vouchers {
+		evs = append(evs, event{
+			TimeUTC: v.CreatedAt.UTC(),
+			Type:    "voucher_created",
+			Message: "Voucher created: " + v.Code,
+		})
+		if v.UsedAt.Valid {
+			ip := strings.TrimSpace(v.UsedByIP.String)
+			evs = append(evs, event{
+				TimeUTC:  v.UsedAt.Time.UTC(),
+				Type:     "voucher_used",
+				Message:  "Voucher used: " + v.Code,
+				ClientIP: ip,
+			})
+		}
+	}
+	for _, sess := range sessions {
+		ip := strings.TrimSpace(sess.IP)
+		evs = append(evs, event{
+			TimeUTC:  sess.StartAt.UTC(),
+			Type:     "session_start",
+			Message:  "Session started",
+			ClientIP: ip,
+		})
+	}
+	sort.Slice(evs, func(i, j int) bool {
+		return evs[i].TimeUTC.After(evs[j].TimeUTC)
+	})
+	if len(evs) > limit {
+		evs = evs[:limit]
+	}
+	writeJSON(w, struct {
+		Items []event `json:"items"`
+	}{
+		Items: evs,
+	})
+}
+
+func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
+	if s.adminUser == "" {
+		return true
+	}
+	u, p, ok := r.BasicAuth()
+	if !ok || u != s.adminUser || p != s.adminPass {
+		w.Header().Set("WWW-Authenticate", `Basic realm="admin"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
+func readDefaultRoute() (string, string) {
+	b, err := os.ReadFile("/proc/net/route")
+	if err != nil {
+		return "", ""
+	}
+	lines := strings.Split(string(b), "\n")
+	for _, ln := range lines[1:] {
+		fields := strings.Fields(ln)
+		if len(fields) < 3 {
+			continue
+		}
+		if fields[1] != "00000000" {
+			continue
+		}
+		iface := fields[0]
+		gwHex := fields[2]
+		if len(gwHex) != 8 {
+			return iface, ""
+		}
+		v, err := strconv.ParseUint(gwHex, 16, 32)
+		if err != nil {
+			return iface, ""
+		}
+		ip := net.IPv4(byte(v), byte(v>>8), byte(v>>16), byte(v>>24)).String()
+		return iface, ip
+	}
+	return "", ""
 }
 
 func (s *Server) consumeVoucher(ctx context.Context, code string, mac string, ip string) (store.ConsumeVoucherResult, error) {

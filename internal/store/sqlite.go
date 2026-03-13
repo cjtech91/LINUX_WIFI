@@ -206,6 +206,93 @@ func (s *Store) GetActiveSessionByIP(ctx context.Context, ip string, now time.Ti
 	}, true, nil
 }
 
+func (s *Store) ListVouchers(ctx context.Context, limit int) ([]Voucher, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		select code, minutes, created_at_unix, used_at_unix, used_by_mac, used_by_ip
+		from vouchers
+		order by created_at_unix desc
+		limit ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Voucher, 0, min(limit, 200))
+	for rows.Next() {
+		var (
+			code         string
+			minutes      int
+			createdAtUnix int64
+			usedAtUnix   sql.NullInt64
+			usedByMAC    sql.NullString
+			usedByIP     sql.NullString
+		)
+		if err := rows.Scan(&code, &minutes, &createdAtUnix, &usedAtUnix, &usedByMAC, &usedByIP); err != nil {
+			return nil, err
+		}
+		v := Voucher{
+			Code:      code,
+			Minutes:   minutes,
+			CreatedAt: time.Unix(createdAtUnix, 0).UTC(),
+			UsedByMAC: usedByMAC,
+			UsedByIP:  usedByIP,
+		}
+		if usedAtUnix.Valid {
+			v.UsedAt = sql.NullTime{Time: time.Unix(usedAtUnix.Int64, 0).UTC(), Valid: true}
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) ListSessions(ctx context.Context, limit int) ([]Session, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `
+		select id, mac, ip, start_at_unix, end_at_unix
+		from sessions
+		order by start_at_unix desc
+		limit ?
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]Session, 0, min(limit, 200))
+	for rows.Next() {
+		var (
+			id          int64
+			mac         sql.NullString
+			ipOut       sql.NullString
+			startAtUnix int64
+			endAtUnix   int64
+		)
+		if err := rows.Scan(&id, &mac, &ipOut, &startAtUnix, &endAtUnix); err != nil {
+			return nil, err
+		}
+		out = append(out, Session{
+			ID:      id,
+			MAC:     mac.String,
+			IP:      ipOut.String,
+			StartAt: time.Unix(startAtUnix, 0).UTC(),
+			EndAt:   time.Unix(endAtUnix, 0).UTC(),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func ping(ctx context.Context, db *sql.DB) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -266,4 +353,11 @@ func (s *Store) CountActiveSessions(ctx context.Context, now time.Time) (int64, 
 		return 0, err
 	}
 	return n, nil
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
