@@ -61,6 +61,10 @@ if "%DHCP_START%"=="" set "DHCP_START=%DEFAULT_DHCP_START%"
 set /p DHCP_END=DHCP end [%DEFAULT_DHCP_END%] :
 if "%DHCP_END%"=="" set "DHCP_END=%DEFAULT_DHCP_END%"
 
+set /p SINGLE_LAN=Single-LAN mode (USB-LAN as LAN, no VLAN trunk) [Y/n] :
+if "%SINGLE_LAN%"=="" set "SINGLE_LAN=Y"
+if /I "%SINGLE_LAN%"=="Y" (set "SINGLE_LAN=1") else (set "SINGLE_LAN=0")
+
 set "TMP_SCRIPT=%TEMP%\pisowifi_install_%RANDOM%.sh"
 
 > "%TMP_SCRIPT%" (
@@ -76,6 +80,7 @@ set "TMP_SCRIPT=%TEMP%\pisowifi_install_%RANDOM%.sh"
   echo DHCP_START="%DHCP_START%"
   echo DHCP_END="%DHCP_END%"
   echo REPO_URL="%REPO_URL%"
+  echo SINGLE_LAN="%SINGLE_LAN%"
   echo.
   echo if [ -z "$WAN_IF" ] ^|^| [ "$WAN_IF" = "AUTO" ]; then
   echo ^  WAN_IF="$(ip route show default 2^>^/dev/null ^| awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
@@ -112,22 +117,33 @@ set "TMP_SCRIPT=%TEMP%\pisowifi_install_%RANDOM%.sh"
   echo sudo install -m 0755 pisowifi /usr/local/bin/pisowifi
   echo /usr/local/bin/pisowifi serve -h ^>/dev/null
   echo.
-  echo echo "== Creating VLAN interface $WAN_IF.$VLAN_ID =="
-  echo sudo ip link show "$WAN_IF" ^>/dev/null
-  echo sudo ip link show "$WAN_IF.$VLAN_ID" ^>/dev/null 2^>^&1 ^|^| sudo ip link add link "$WAN_IF" name "$WAN_IF.$VLAN_ID" type vlan id "$VLAN_ID"
-  echo sudo ip link set "$WAN_IF.$VLAN_ID" up
-  echo.
-  echo echo "== Creating bridge br10 (LAN) and attaching ports =="
-  echo sudo ip link add br10 type bridge 2^>^/dev/null ^|^| true
-  echo sudo ip link set br10 up
-  echo sudo ip addr flush dev "$WAN_IF.$VLAN_ID" ^|^| true
-  echo sudo ip link set "$WAN_IF.$VLAN_ID" master br10
-  echo if [ -n "$USB_IF" ] ^&^& ip link show "$USB_IF" ^>/dev/null 2^>^&1; then
+  echo echo "== Configuring LAN (Single-LAN mode: $SINGLE_LAN) =="
+  echo if [ "${SINGLE_LAN}" = "1" ]; then
+  echo ^  if [ -z "$USB_IF" ] ^|| ! ip link show "$USB_IF" ^>/dev/null 2^>^&1; then
+  echo ^    echo "ERROR: SINGLE_LAN requires USB_IF (your LAN NIC) to be set and present" 1^>^&2; exit 1;
+  echo ^  fi
+  echo ^  sudo ip link add br10 type bridge 2^>^/dev/null ^|^| true
+  echo ^  sudo ip link set br10 up
   echo ^  sudo ip addr flush dev "$USB_IF" ^|^| true
   echo ^  sudo ip link set "$USB_IF" up
   echo ^  sudo ip link set "$USB_IF" master br10
+  echo ^  sudo ip addr replace "$LAN_IP/$LAN_PREFIX" dev br10
+  echo else
+  echo ^  echo "== Creating VLAN interface $WAN_IF.$VLAN_ID and bridging to br10 =="
+  echo ^  sudo ip link show "$WAN_IF" ^>/dev/null
+  echo ^  sudo ip link show "$WAN_IF.$VLAN_ID" ^>/dev/null 2^>^&1 ^|^| sudo ip link add link "$WAN_IF" name "$WAN_IF.$VLAN_ID" type vlan id "$VLAN_ID"
+  echo ^  sudo ip link set "$WAN_IF.$VLAN_ID" up
+  echo ^  sudo ip link add br10 type bridge 2^>^/dev/null ^|^| true
+  echo ^  sudo ip link set br10 up
+  echo ^  sudo ip addr flush dev "$WAN_IF.$VLAN_ID" ^|^| true
+  echo ^  sudo ip link set "$WAN_IF.$VLAN_ID" master br10
+  echo ^  if [ -n "$USB_IF" ] ^&^& ip link show "$USB_IF" ^>/dev/null 2^>^&1; then
+  echo ^    sudo ip addr flush dev "$USB_IF" ^|^| true
+  echo ^    sudo ip link set "$USB_IF" up
+  echo ^    sudo ip link set "$USB_IF" master br10
+  echo ^  fi
+  echo ^  sudo ip addr replace "$LAN_IP/$LAN_PREFIX" dev br10
   echo fi
-  echo sudo ip addr replace "$LAN_IP/$LAN_PREFIX" dev br10
   echo.
   echo echo "== Persisting network setup at boot (systemd) =="
   echo sudo tee /etc/pisowifi.env ^>/dev/null ^<^< 'ENV'
@@ -136,6 +152,7 @@ set "TMP_SCRIPT=%TEMP%\pisowifi_install_%RANDOM%.sh"
   echo USB_IF=$USB_IF
   echo LAN_IP=$LAN_IP
   echo LAN_PREFIX=$LAN_PREFIX
+  echo SINGLE_LAN=%SINGLE_LAN%
   echo ENV
   echo sudo tee /etc/systemd/system/pisowifi-net.service ^>/dev/null ^<^< 'UNIT'
   echo [Unit]
@@ -148,7 +165,7 @@ set "TMP_SCRIPT=%TEMP%\pisowifi_install_%RANDOM%.sh"
   echo Type=oneshot
   echo RemainAfterExit=yes
   echo EnvironmentFile=-/etc/pisowifi.env
-  echo ExecStart=/bin/bash -lc 'set -euxo pipefail; WAN_IF="${WAN_IF:-AUTO}"; VLAN_ID="${VLAN_ID:-13}"; USB_IF="${USB_IF:-}"; LAN_IP="${LAN_IP:-10.0.0.1}"; LAN_PREFIX="${LAN_PREFIX:-24}"; if [ -z "$WAN_IF" ] || [ "$WAN_IF" = "AUTO" ]; then if ip link show end0 >/dev/null 2>&1; then WAN_IF="end0"; elif ip link show eth0 >/dev/null 2>&1; then WAN_IF="eth0"; else WAN_IF="$(ip -o -4 route show to default 2>/dev/null | sed -E "s/.* dev ([^ ]+).*/\\1/;q")"; fi; fi; [ -n "$WAN_IF" ]; ip link show "$WAN_IF" >/dev/null; ip link show "$WAN_IF.$VLAN_ID" >/dev/null 2>&1 || ip link add link "$WAN_IF" name "$WAN_IF.$VLAN_ID" type vlan id "$VLAN_ID"; ip link set "$WAN_IF.$VLAN_ID" up; ip link add br10 type bridge 2>/dev/null || true; ip link set br10 up; ip addr flush dev "$WAN_IF.$VLAN_ID" || true; ip link set "$WAN_IF.$VLAN_ID" master br10; if [ -n "$USB_IF" ] && ip link show "$USB_IF" >/dev/null 2>&1; then ip addr flush dev "$USB_IF" || true; ip link set "$USB_IF" up; ip link set "$USB_IF" master br10; fi; ip addr replace "$LAN_IP/$LAN_PREFIX" dev br10'
+  echo ExecStart=/bin/bash -lc 'set -euxo pipefail; WAN_IF="${WAN_IF:-AUTO}"; VLAN_ID="${VLAN_ID:-13}"; USB_IF="${USB_IF:-}"; SINGLE_LAN="${SINGLE_LAN:-1}"; LAN_IP="${LAN_IP:-10.0.0.1}"; LAN_PREFIX="${LAN_PREFIX:-24}"; if [ -z "$WAN_IF" ] || [ "$WAN_IF" = "AUTO" ]; then if ip link show end0 >/dev/null 2>&1; then WAN_IF="end0"; elif ip link show eth0 >/dev/null 2>&1; then WAN_IF="eth0"; else WAN_IF="$(ip -o -4 route show to default 2>/dev/null | sed -E "s/.* dev ([^ ]+).*/\\1/;q")"; fi; fi; [ -n "$WAN_IF" ]; ip link show "$WAN_IF" >/dev/null; ip link add br10 type bridge 2>/dev/null || true; ip link set br10 up; if [ "$SINGLE_LAN" = "1" ]; then if [ -z "$USB_IF" ] || ! ip link show "$USB_IF" >/dev/null 2>&1; then echo "SINGLE_LAN requires USB_IF" 1>&2; exit 1; fi; ip addr flush dev "$USB_IF" || true; ip link set "$USB_IF" up; ip link set "$USB_IF" master br10; else ip link show "$WAN_IF.$VLAN_ID" >/dev/null 2>&1 || ip link add link "$WAN_IF" name "$WAN_IF.$VLAN_ID" type vlan id "$VLAN_ID"; ip link set "$WAN_IF.$VLAN_ID" up; ip addr flush dev "$WAN_IF.$VLAN_ID" || true; ip link set "$WAN_IF.$VLAN_ID" master br10; if [ -n "$USB_IF" ] && ip link show "$USB_IF" >/dev/null 2>&1; then ip addr flush dev "$USB_IF" || true; ip link set "$USB_IF" up; ip link set "$USB_IF" master br10; fi; fi; ip addr replace "$LAN_IP/$LAN_PREFIX" dev br10'
   echo.
   echo [Install]
   echo WantedBy=multi-user.target

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"linux_wifi/internal/gpio"
 	"linux_wifi/internal/store"
 )
 
@@ -234,6 +235,11 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Has("logout") {
+		w.Header().Set("WWW-Authenticate", `Basic realm="admin"`)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	if s.adminUser != "" {
 		u, p, ok := r.BasicAuth()
 		if !ok || u != s.adminUser || p != s.adminPass {
@@ -242,10 +248,16 @@ func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	page := strings.TrimSpace(r.URL.Query().Get("page"))
+	if page == "" {
+		page = "dashboard"
+	}
 	data := struct {
 		Title string
+		Page  string
 	}{
 		Title: s.title,
+		Page:  page,
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_ = s.adminTmpl.Execute(w, data)
@@ -263,16 +275,37 @@ func (s *Server) handleAdminSummary(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	active, _ := s.store.CountActiveSessions(r.Context(), now)
 	vcount, _ := s.store.CountVouchers(r.Context())
+	board := gpio.Detect()
 	writeJSON(w, struct {
 		ActiveSessions int64  `json:"active_sessions"`
 		Vouchers       int64  `json:"vouchers"`
 		GatewayIP      string `json:"gateway_ip"`
 		TimeUTC        string `json:"time_utc"`
+		BoardModel     string `json:"board_model"`
+		GPIO           any    `json:"gpio"`
 	}{
 		ActiveSessions: active,
 		Vouchers:       vcount,
 		GatewayIP:      r.Host,
 		TimeUTC:        now.Format(time.RFC3339),
+		BoardModel:     board.Model,
+		GPIO: struct {
+			Disabled bool   `json:"disabled"`
+			CoinPin  int    `json:"coin_pin"`
+			BillPin  int    `json:"bill_pin"`
+			RelayPin int    `json:"relay_pin"`
+			CoinEdge string `json:"coin_edge"`
+			BillEdge string `json:"bill_edge"`
+			Relay    string `json:"relay_active"`
+		}{
+			Disabled: board.Config.GPIODisabled,
+			CoinPin:  board.Config.CoinPin,
+			BillPin:  board.Config.BillPin,
+			RelayPin: board.Config.RelayPin,
+			CoinEdge: board.Config.CoinPinEdge,
+			BillEdge: board.Config.BillPinEdge,
+			Relay:    board.Config.RelayPinActive,
+		},
 	})
 }
 

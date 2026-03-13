@@ -8,13 +8,38 @@ const adminHTML = `<!doctype html>
     <title>{{.Title}} • Admin</title>
     <style>
       :root { --bg:#0f172a; --panel:#1e293b; --muted:#94a3b8; --text:#e2e8f0; --accent:#10b981; --warn:#f59e0b; --danger:#ef4444; }
-      *{box-sizing:border-box} body{margin:0;display:flex;height:100vh;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
-      .sidebar{width:220px;background:#0b1222;border-right:1px solid #0b152b;padding:16px;display:flex;flex-direction:column;gap:8px}
-      .brand{font-weight:700;margin-bottom:12px}
-      .nav a{display:block;padding:10px 12px;border-radius:8px;color:var(--muted);text-decoration:none}
+      *{box-sizing:border-box}
+      body{margin:0;height:100vh;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif}
+      .layout{display:flex;height:100vh;overflow:hidden}
+      .overlay{position:fixed;inset:0;background:rgba(0,0,0,.55);opacity:0;pointer-events:none;transition:opacity .15s ease}
+      body.sidebar-open .overlay{opacity:1;pointer-events:auto}
+
+      .sidebar{width:240px;background:#0b1222;border-right:1px solid #0b152b;padding:14px;display:flex;flex-direction:column;gap:10px;transition:transform .15s ease, width .15s ease}
+      .brand{display:flex;align-items:center;gap:10px;font-weight:800}
+      .brand .badge{font-size:11px;color:var(--muted);border:1px solid #193657;border-radius:999px;padding:2px 8px}
+      .sectionTitle{margin-top:6px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em}
+      .nav{display:flex;flex-direction:column;gap:6px}
+      .nav a{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;color:var(--muted);text-decoration:none;transition:background .12s ease,color .12s ease}
+      .nav a .ico{width:18px;opacity:.9}
       .nav a.active,.nav a:hover{background:#121e35;color:var(--text)}
-      .main{flex:1;display:flex;flex-direction:column}
-      .topbar{padding:12px 16px;border-bottom:1px solid #0b152b}
+      .spacer{flex:1}
+      .logout{margin-top:8px}
+      .logout a{display:flex;align-items:center;justify-content:center;padding:10px 12px;border-radius:10px;background:#2a3446;border:1px solid #35435c;color:var(--text);text-decoration:none}
+      .logout a:hover{background:#313d52}
+
+      body.sidebar-collapsed .sidebar{width:72px}
+      body.sidebar-collapsed .nav a span.txt{display:none}
+      body.sidebar-collapsed .sectionTitle{display:none}
+      body.sidebar-collapsed .brand .txt{display:none}
+      body.sidebar-collapsed .brand .badge{display:none}
+
+      .main{flex:1;display:flex;flex-direction:column;min-width:0}
+      .topbar{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid #0b152b}
+      .topbar .title{font-weight:800}
+      .topbar .pill{margin-left:auto;display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12px}
+      .topbar .dot{width:10px;height:10px;border-radius:999px;background:var(--accent)}
+      .iconBtn{border:1px solid #193657;background:#13223a;color:var(--text);border-radius:10px;padding:8px 10px;cursor:pointer}
+      .iconBtn:hover{background:#162846}
       .grid{display:grid;gap:12px;padding:16px;grid-template-columns:repeat(12,1fr)}
       .card{background:var(--panel);border:1px solid #0b152b;border-radius:12px;padding:14px}
       .span-3{grid-column:span 3}
@@ -27,28 +52,66 @@ const adminHTML = `<!doctype html>
       .btn:hover{background:#162846}
       .table{width:100%;border-collapse:collapse;margin-top:8px}
       .table th,.table td{padding:8px;border-bottom:1px solid #0b152b;font-size:14px;color:var(--muted)}
-      @media (max-width:960px){.sidebar{display:none}.grid{grid-template-columns:repeat(6,1fr)}.span-6{grid-column:span 6}.span-4{grid-column:span 6}.span-3{grid-column:span 6}}
+      .muted{color:var(--muted)}
+
+      @media (max-width:960px){
+        body.sidebar-collapsed .sidebar{width:240px}
+        .sidebar{position:fixed;z-index:20;top:0;bottom:0;left:0;transform:translateX(-102%)}
+        body.sidebar-open .sidebar{transform:translateX(0)}
+        .grid{grid-template-columns:repeat(6,1fr)}
+        .span-6{grid-column:span 6}
+        .span-4{grid-column:span 6}
+        .span-3{grid-column:span 6}
+      }
     </style>
   </head>
   <body>
-    <aside class="sidebar">
-      <div class="brand">{{.Title}} Admin</div>
-      <nav class="nav">
-        <a class="active" href="/admin">Dashboard</a>
-        <a href="#" onclick="alert('Coming soon')">Interfaces</a>
-        <a href="#" onclick="alert('Coming soon')">Vouchers</a>
-        <a href="#" onclick="alert('Coming soon')">Logs</a>
-        <a href="#" onclick="alert('Coming soon')">Settings</a>
-      </nav>
-      <div style="margin-top:auto">
-        <a class="nav" style="padding:0" href="/">← Back to Portal</a>
-      </div>
-    </aside>
-    <main class="main">
-      <div class="topbar">
-        <strong>Dashboard</strong>
-      </div>
-      <section class="grid">
+    <div class="overlay" id="overlay"></div>
+    <div class="layout">
+      <aside class="sidebar" id="sidebar">
+        <div class="brand">
+          <span class="ico">▦</span>
+          <span class="txt">{{.Title}}</span>
+          <span class="badge">Admin</span>
+        </div>
+
+        <div class="sectionTitle">Admin</div>
+        <nav class="nav" id="navAdmin">
+          <a data-page="dashboard" href="/admin?page=dashboard"><span class="ico">⌂</span><span class="txt">Dashboard</span></a>
+        </nav>
+
+        <div class="sectionTitle">Pages</div>
+        <nav class="nav" id="navPages">
+          <a data-page="interfaces" href="/admin?page=interfaces"><span class="ico">⇄</span><span class="txt">Interfaces</span></a>
+          <a data-page="pppoe" href="/admin?page=pppoe"><span class="ico">⛓</span><span class="txt">PPPOE</span></a>
+          <a data-page="vouchers" href="/admin?page=vouchers"><span class="ico">⟡</span><span class="txt">Vouchers</span></a>
+          <a data-page="network" href="/admin?page=network"><span class="ico">⛭</span><span class="txt">Network</span></a>
+          <a data-page="qos" href="/admin?page=qos"><span class="ico">≋</span><span class="txt">QoS</span></a>
+          <a data-page="subvendo" href="/admin?page=subvendo"><span class="ico">☷</span><span class="txt">Sub Vendo</span></a>
+          <a data-page="portal" href="/admin?page=portal"><span class="ico">⌁</span><span class="txt">Portal</span></a>
+          <a data-page="logs" href="/admin?page=logs"><span class="ico">≣</span><span class="txt">Logs</span></a>
+          <a data-page="devices" href="/admin?page=devices"><span class="ico">▣</span><span class="txt">Devices</span></a>
+          <a data-page="chat" href="/admin?page=chat"><span class="ico">✉</span><span class="txt">Chat</span></a>
+          <a data-page="hotspot-sales" href="/admin?page=hotspot-sales"><span class="ico">₱</span><span class="txt">Hotspot Sales</span></a>
+          <a data-page="pppoe-sales" href="/admin?page=pppoe-sales"><span class="ico">₱</span><span class="txt">PPPOE Sales</span></a>
+          <a data-page="license" href="/admin?page=license"><span class="ico">◈</span><span class="txt">License</span></a>
+          <a data-page="settings" href="/admin?page=settings"><span class="ico">⚙</span><span class="txt">Settings</span></a>
+        </nav>
+
+        <div class="spacer"></div>
+
+        <div class="logout">
+          <a href="/admin?logout=1">Logout</a>
+        </div>
+      </aside>
+      <main class="main">
+        <div class="topbar">
+          <button class="iconBtn" id="menuBtn" type="button">☰</button>
+          <button class="iconBtn" id="collapseBtn" type="button">⇤</button>
+          <div class="title" id="pageTitle">Dashboard</div>
+          <div class="pill"><span class="dot"></span><span>System Online</span></div>
+        </div>
+        <section class="grid" id="dashboardSection">
         <div class="card span-3">
           <div class="title">Active Sessions</div>
           <div class="value" id="activeSessions">-</div>
@@ -82,8 +145,21 @@ const adminHTML = `<!doctype html>
             <tbody id="activity"><tr><td>Loaded dashboard</td><td id="loadTime">-</td></tr></tbody>
           </table>
         </div>
-      </section>
-    </main>
+        </section>
+
+        <section class="grid" id="pageSection" style="display:none">
+          <div class="card span-6">
+            <div class="title" id="pageSectionTitle">Page</div>
+            <div class="muted" id="pageSectionHint" style="margin-top:10px">Coming soon</div>
+          </div>
+          <div class="card span-6">
+            <div class="title">Board</div>
+            <div class="muted" id="boardModel" style="margin-top:10px">-</div>
+            <div class="muted" id="gpioInfo" style="margin-top:8px">-</div>
+          </div>
+        </section>
+      </main>
+    </div>
     <script>
       async function fetchSummary() {
         try {
@@ -94,6 +170,13 @@ const adminHTML = `<!doctype html>
           document.getElementById('vouchers').textContent = data.vouchers ?? '-';
           document.getElementById('gateway').textContent = data.gateway_ip ?? '-';
           document.getElementById('timeNow').textContent = data.time_utc ?? '-';
+          if (document.getElementById('boardModel')) {
+            document.getElementById('boardModel').textContent = data.board_model ?? '-';
+            if (data.gpio) {
+              const d = data.gpio.disabled ? 'disabled' : 'enabled';
+              document.getElementById('gpioInfo').textContent = `GPIO ${d} • coin ${data.gpio.coin_pin} (${data.gpio.coin_edge}) • bill ${data.gpio.bill_pin} (${data.gpio.bill_edge}) • relay ${data.gpio.relay_pin} (${data.gpio.relay_active})`;
+            }
+          }
         } catch (e) {
           document.getElementById('activeSessions').textContent = '-';
         }
@@ -118,8 +201,53 @@ const adminHTML = `<!doctype html>
         tr.appendChild(td1); tr.appendChild(td2); tb.prepend(tr);
       }
       document.getElementById('loadTime').textContent = new Date().toISOString();
-      fetchSummary(); setInterval(fetchSummary, 5000);
+      function setPageFromQuery() {
+        const params = new URLSearchParams(window.location.search);
+        const page = (params.get('page') || '{{.Page}}' || 'dashboard').toLowerCase();
+        const title = page.replaceAll('-', ' ').replaceAll('_', ' ');
+        const nice = title.charAt(0).toUpperCase() + title.slice(1);
+        document.getElementById('pageTitle').textContent = nice === '' ? 'Dashboard' : nice;
+
+        const all = document.querySelectorAll('.nav a[data-page]');
+        all.forEach(a => a.classList.remove('active'));
+        const active = document.querySelector('.nav a[data-page="'+page+'"]');
+        if (active) active.classList.add('active');
+
+        if (page === 'dashboard') {
+          document.getElementById('dashboardSection').style.display = '';
+          document.getElementById('pageSection').style.display = 'none';
+        } else {
+          document.getElementById('dashboardSection').style.display = 'none';
+          document.getElementById('pageSection').style.display = '';
+          document.getElementById('pageSectionTitle').textContent = nice;
+          document.getElementById('pageSectionHint').textContent = 'Coming soon';
+        }
+      }
+
+      function openSidebar() { document.body.classList.add('sidebar-open'); }
+      function closeSidebar() { document.body.classList.remove('sidebar-open'); }
+      function toggleCollapse() {
+        const collapsed = document.body.classList.toggle('sidebar-collapsed');
+        try { localStorage.setItem('admin_sidebar_collapsed', collapsed ? '1' : '0'); } catch {}
+      }
+      function initCollapseFromStorage() {
+        try {
+          const v = localStorage.getItem('admin_sidebar_collapsed');
+          if (v === '1') document.body.classList.add('sidebar-collapsed');
+        } catch {}
+      }
+
+      document.getElementById('menuBtn').addEventListener('click', () => {
+        if (document.body.classList.contains('sidebar-open')) closeSidebar(); else openSidebar();
+      });
+      document.getElementById('collapseBtn').addEventListener('click', () => toggleCollapse());
+      document.getElementById('overlay').addEventListener('click', () => closeSidebar());
+      document.querySelectorAll('.sidebar a').forEach(a => a.addEventListener('click', () => closeSidebar()));
+
+      initCollapseFromStorage();
+      setPageFromQuery();
+      fetchSummary();
+      setInterval(fetchSummary, 5000);
     </script>
   </body>
   </html>`
-
