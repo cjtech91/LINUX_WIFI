@@ -521,6 +521,12 @@ const adminHTML = `<!doctype html>
             render();
           } catch {}
         }
+        modal.querySelector('#addRateBtn').addEventListener('click', async () => {
+          openRateEditor(async function (rate) {
+            data.push(rate);
+            await save();
+          });
+        });
         modal.querySelector('#closeRateBtn').addEventListener('click', () => {
           document.body.removeChild(backdrop);
         });
