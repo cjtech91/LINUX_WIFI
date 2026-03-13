@@ -318,6 +318,10 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			end_at_unix integer not null
 		);`,
 		`create index if not exists idx_sessions_ip_end on sessions (ip, end_at_unix);`,
+		`create table if not exists settings (
+			key text primary key not null,
+			value text not null
+		);`,
 	}
 	for i, stmt := range stmts {
 		if _, err := db.ExecContext(ctx, stmt); err != nil {
@@ -360,4 +364,24 @@ func min(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func (s *Store) SetSetting(ctx context.Context, key, value string) error {
+	_, err := s.db.ExecContext(ctx, `
+		insert into settings (key, value) values (?, ?)
+		on conflict(key) do update set value=excluded.value
+	`, key, value)
+	return err
+}
+
+func (s *Store) GetSetting(ctx context.Context, key string) (string, bool, error) {
+	row := s.db.QueryRowContext(ctx, `select value from settings where key = ?`, key)
+	var v string
+	if err := row.Scan(&v); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return v, true, nil
 }

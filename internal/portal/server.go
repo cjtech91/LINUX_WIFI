@@ -81,6 +81,8 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/admin/interfaces", s.handleAdminInterfaces)
 	mux.HandleFunc("GET /api/admin/vouchers", s.handleAdminVouchers)
 	mux.HandleFunc("GET /api/admin/logs", s.handleAdminLogs)
+	mux.HandleFunc("GET /api/admin/rates", s.handleAdminGetRates)
+	mux.HandleFunc("POST /api/admin/rates", s.handleAdminSetRates)
 }
 
 func (s *Server) handlePortal(w http.ResponseWriter, r *http.Request) {
@@ -453,6 +455,52 @@ func (s *Server) handleAdminLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) handleAdminGetRates(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	const key = "rates"
+	val, ok, err := s.store.GetSetting(r.Context(), key)
+	if err != nil {
+		http.Error(w, "get rates failed", http.StatusInternalServerError)
+		return
+	}
+	if !ok || strings.TrimSpace(val) == "" {
+		val = `[{"minutes":60,"price":10},{"minutes":180,"price":25},{"minutes":1440,"price":60}]`
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(val))
+}
+
+func (s *Server) handleAdminSetRates(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdmin(w, r) {
+		return
+	}
+	defer r.Body.Close()
+	buf := make([]byte, 0, 4096)
+	tmp := make([]byte, 1024)
+	for {
+		n, err := r.Body.Read(tmp)
+		if n > 0 {
+			buf = append(buf, tmp[:n]...)
+		}
+		if err != nil {
+			break
+		}
+	}
+	js := strings.TrimSpace(string(buf))
+	if js == "" {
+		http.Error(w, "empty body", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.SetSetting(r.Context(), "rates", js); err != nil {
+		http.Error(w, "set rates failed", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, struct {
+		Ok bool `json:"ok"`
+	}{Ok: true})
+}
 func (s *Server) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	if s.adminUser == "" {
 		return true

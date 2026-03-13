@@ -327,6 +327,8 @@ const adminHTML = `<!doctype html>
             loadVouchers();
           } else if (page === 'logs') {
             loadLogs();
+          } else if (page === 'subvendo') {
+            loadSubVendo();
           } else {
             document.getElementById('pageSectionHint').textContent = 'Coming soon';
           }
@@ -357,6 +359,77 @@ const adminHTML = `<!doctype html>
       setPageFromQuery();
       fetchSummary();
       setInterval(fetchSummary, 5000);
+
+      async function loadSubVendo() {
+        const sec = document.getElementById('pageSection');
+        const hint = document.getElementById('pageSectionHint');
+        hint.textContent = 'Registered devices';
+        const wrap = document.createElement('div');
+        wrap.className = 'row';
+        const card = document.createElement('div');
+        card.className = 'card span-12';
+        card.innerHTML =
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px">' +
+          '  <div><strong>Main Vendo</strong> <span class="muted" style="margin-left:8px">ACTIVE • Online Now</span></div>' +
+          '  <div class="row">' +
+          '    <button class="btn" id="ratesBtn">Rates</button>' +
+          '    <button class="btn" id="freeBtn">Free Time</button>' +
+          '  </div>' +
+          '</div>' +
+          '<div id="ratesList" class="muted" style="margin-top:10px"></div>' +
+          '<div id="actionOut" style="margin-top:10px;color:#10b981"></div>';
+        wrap.appendChild(card);
+        sec.appendChild(wrap);
+        document.getElementById('pageTable').style.display = 'none';
+
+        async function refreshRates() {
+          try {
+            const res = await fetch('/api/admin/rates', {cache:'no-store'});
+            if (!res.ok) throw new Error('bad');
+            const arr = await res.json();
+            const text = Array.isArray(arr) ? arr.map(x => (x.minutes + 'm → ₱' + x.price)).join(', ') : '';
+            document.getElementById('ratesList').textContent = text || 'No rates configured';
+          } catch {
+            document.getElementById('ratesList').textContent = 'Failed to load rates';
+          }
+        }
+        document.getElementById('ratesBtn').addEventListener('click', async () => {
+          const val = prompt('Enter rates as minutes,price;minutes,price (e.g., 60,10;180,25;1440,60)');
+          if (!val) return;
+          const parts = val.split(';').map(s => s.trim()).filter(Boolean);
+          const arr = [];
+          for (const p of parts) {
+            const kv = p.split(',').map(s => s.trim());
+            if (kv.length === 2) {
+              const m = parseInt(kv[0], 10);
+              const pr = parseFloat(kv[1]);
+              if (!isNaN(m) && !isNaN(pr)) arr.push({minutes: m, price: pr});
+            }
+          }
+          try {
+            const res = await fetch('/api/admin/rates', {method:'POST', body: JSON.stringify(arr)});
+            if (!res.ok) throw new Error('bad');
+            document.getElementById('actionOut').textContent = 'Rates saved';
+            refreshRates();
+          } catch {
+            document.getElementById('actionOut').textContent = 'Failed to save rates';
+          }
+        });
+        document.getElementById('freeBtn').addEventListener('click', async () => {
+          const m = prompt('Free time minutes for voucher?');
+          const mins = parseInt((m || '').trim(), 10);
+          if (!mins || mins <= 0) return;
+          try {
+            const res = await fetch('/api/v1/vouchers', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({minutes: mins})});
+            if (!res.ok) throw new Error('bad');
+            const v = await res.json();
+            document.getElementById('actionOut').textContent = 'Free-time voucher: ' + v.code + ' ('+v.minutes+' mins)';
+          } catch {
+            document.getElementById('actionOut').textContent = 'Failed to create free-time voucher';
+          }
+        });
+        refreshRates();
+      }
     </script>
   </body>
   </html>`
