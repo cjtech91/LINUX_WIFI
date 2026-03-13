@@ -27,6 +27,12 @@ const portalHTML = `<!doctype html>
       .modalBody{padding:12px 16px;overflow:auto}
       .modalFooter{padding:12px 16px;border-top:1px solid #eee;display:flex;justify-content:flex-end;gap:8px}
       .modalFooter button{width:auto;margin-top:0}
+      .ratesTitle{font-size:26px;font-weight:900;text-align:center;margin:10px 0 8px 0}
+      .ratesTable{width:100%;border-collapse:collapse;border-radius:8px;overflow:hidden}
+      .ratesTable th{background:#eaf3ff;color:#2b6cb0;font-size:14px;letter-spacing:.08em;text-transform:uppercase;padding:10px;border-bottom:1px solid #e6eef8}
+      .ratesTable td{padding:10px;border-bottom:1px solid #f0f3f7;text-align:center}
+      .ratesTable td.rate{color:#19b45b;font-weight:900}
+      .ratesClose{width:100%;margin-top:0;background:#2f93d8;border:0;color:#fff;padding:14px;border-radius:8px;font-size:18px;font-weight:800}
     </style>
   </head>
   <body>
@@ -90,14 +96,27 @@ const portalHTML = `<!doctype html>
     <div class="backdrop" id="ratesBackdrop">
       <div class="modal">
         <div class="modalHeader">
-          <span>Rates</span>
-          <span class="muted">Main Vendo</span>
+          <span class="muted"></span>
+          <span class="muted"></span>
         </div>
         <div class="modalBody">
-          <div id="ratesList" class="muted">Loading...</div>
+          <div class="ratesTitle">WiFi Rates</div>
+          <table class="ratesTable">
+            <thead>
+              <tr>
+                <th>Rate</th>
+                <th>Time</th>
+                <th>Speed</th>
+                <th>Type</th>
+              </tr>
+            </thead>
+            <tbody id="ratesBody">
+              <tr><td colspan="4" class="muted" style="text-align:center;padding:14px">Loading...</td></tr>
+            </tbody>
+          </table>
         </div>
         <div class="modalFooter">
-          <button type="button" class="secondary" id="ratesCloseBtn">Close</button>
+          <button type="button" class="ratesClose" id="ratesCloseBtn">Close</button>
         </div>
       </div>
     </div>
@@ -121,7 +140,7 @@ const portalHTML = `<!doctype html>
 
         const ratesBackdrop = document.getElementById("ratesBackdrop");
         const ratesCloseBtn = document.getElementById("ratesCloseBtn");
-        const ratesList = document.getElementById("ratesList");
+        const ratesBody = document.getElementById("ratesBody");
 
         let secondsLeft = 0;
         let countdownId = null;
@@ -271,24 +290,57 @@ const portalHTML = `<!doctype html>
 
         async function openRates() {
           ratesBackdrop.style.display = "flex";
-          ratesList.textContent = "Loading...";
+          ratesBody.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:14px">Loading...</td></tr>';
           try {
             const res = await fetch("/api/v1/rates", { cache: "no-store" });
             if (!res.ok) throw new Error("bad");
             const d = await res.json();
             const items = (d && d.items) ? d.items : [];
             if (!items.length) {
-              ratesList.textContent = "No rates configured.";
+              ratesBody.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:14px">No rates configured.</td></tr>';
               return;
             }
-            const parts = items.map((r) => {
-              const p = r.price || 0;
-              const m = r.minutes || 0;
-              return "₱" + p + " = " + m + " min";
+            function fmtTime(mins) {
+              const m = Number(mins || 0);
+              if (!isFinite(m) || m <= 0) return "-";
+              if (m < 60) return m + " Mins";
+              if (m % 1440 === 0) return (m / 1440) + " Days";
+              if (m % 60 === 0) return (m / 60) + " Hrs";
+              const h = Math.floor(m / 60);
+              const mm = m % 60;
+              return h + " Hrs " + mm + " Mins";
+            }
+            function fmtSpeed(r) {
+              const up = Number(r.up_mbps || 0);
+              const down = Number(r.down_mbps || 0);
+              if (up > 0 && down > 0) return up + "M/" + down + "M";
+              if (up > 0) return up + "M/-";
+              if (down > 0) return "-/" + down + "M";
+              return "5M/5M";
+            }
+            function fmtType(r) {
+              return r.pause ? "Pausable" : "Regular";
+            }
+            ratesBody.innerHTML = "";
+            items.forEach((r) => {
+              const tr = document.createElement("tr");
+              const tdRate = document.createElement("td");
+              tdRate.className = "rate";
+              tdRate.textContent = "₱" + String(r.price || 0);
+              const tdTime = document.createElement("td");
+              tdTime.textContent = fmtTime(r.minutes);
+              const tdSpeed = document.createElement("td");
+              tdSpeed.textContent = fmtSpeed(r);
+              const tdType = document.createElement("td");
+              tdType.textContent = fmtType(r);
+              tr.appendChild(tdRate);
+              tr.appendChild(tdTime);
+              tr.appendChild(tdSpeed);
+              tr.appendChild(tdType);
+              ratesBody.appendChild(tr);
             });
-            ratesList.textContent = parts.join(" • ");
           } catch {
-            ratesList.textContent = "Failed to load rates.";
+            ratesBody.innerHTML = '<tr><td colspan="4" class="muted" style="text-align:center;padding:14px">Failed to load rates.</td></tr>';
           }
         }
 
