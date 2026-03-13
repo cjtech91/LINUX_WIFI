@@ -86,7 +86,7 @@ func (c *SysfsPulseCounter) loop(edge string) {
 
 	pfd := []syscall.PollFd{{
 		Fd:     int32(c.fd),
-		Events: syscall.POLLPRI | syscall.POLLERR,
+		Events: syscall.POLLPRI,
 	}}
 
 	for {
@@ -102,7 +102,10 @@ func (c *SysfsPulseCounter) loop(edge string) {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
-		if (pfd[0].Revents & (syscall.POLLPRI | syscall.POLLERR)) == 0 {
+		if (pfd[0].Revents & syscall.POLLPRI) == 0 {
+			if (pfd[0].Revents & (syscall.POLLERR | syscall.POLLNVAL)) != 0 {
+				time.Sleep(100 * time.Millisecond)
+			}
 			continue
 		}
 
