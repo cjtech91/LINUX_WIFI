@@ -44,10 +44,13 @@ Build and install the binary:
 
 ```bash
 cd /opt/pisowifi
+go mod tidy
 go test ./...
 go vet ./...
 go build -o pisowifi ./cmd/pisowifi
 sudo install -m 0755 pisowifi /usr/local/bin/pisowifi
+command -v pisowifi
+ls -l /usr/local/bin/pisowifi
 ```
 
 ## 4) Install Linux dependencies (on the device)
@@ -61,68 +64,142 @@ sudo sysctl -w net.ipv4.ip_forward=1
 echo "net.ipv4.ip_forward=1" | sudo tee /etc/sysctl.d/99-ipforward.conf
 ```
 
-## 5) Network topology (example: bridge + VLAN 10)
+## 5) Identify your real interface names (important)
 
-Assumptions:
-
-- WAN/uplink interface: `eth0`
-- Wi‑Fi radio interface: `wlan0`
-- Bridge: `br0`
-- Client VLAN: `10` (interface `br0.10`)
-- Client subnet: `10.10.10.0/24` (gateway `10.10.10.1`)
-
-Create bridge and VLAN interface:
+On many Linux images, interfaces are not named `eth0`/`wlan0`. Before applying any network commands, check:
 
 ```bash
-sudo ip link add br0 type bridge vlan_filtering 1
-sudo ip link set br0 up
-
-sudo ip link set eth0 master br0
-sudo ip link set wlan0 master br0
-
-sudo ip link add link br0 name br0.10 type vlan id 10
-sudo ip addr add 10.10.10.1/24 dev br0.10
-sudo ip link set br0.10 up
+ip -br link
+ip route show default
+iw dev || true
 ```
 
-## 6) Generate configs (nftables + dnsmasq + hostapd)
+- Use the `dev` shown by `ip route show default` as your WAN/uplink interface (example: `end0`, `enp1s0`, `eth0`).
+- Use the interface shown by `iw dev` as your Wi‑Fi radio (example: `wlan0`, `wlp2s0`). If `iw dev` shows nothing, you currently have no Wi‑Fi interface available for hostapd.
+- If you plugged a USB-LAN adapter, it typically shows up as `enx...` (example: `enx00e04c68b637`).
+
+Important:
+
+- In the commands below, replace placeholders like `<WAN_IF>` with the real interface name (example: `end0`). Do not include `<` and `>`.
+
+## 6) Recommended topology (tested: end0 WAN + VLAN10 + USB-LAN + optional Wi‑Fi AP)
+
+This setup matches what you already have working on Orange Pi:
+
+- WAN/uplink: `end0` (DHCP from upstream)
+- Client VLAN: `end0.10` (VLAN ID 10, gateway 10.0.0.1/24)
+- Client bridge: `br10` (bridge `end0.10` + USB-LAN + Wi‑Fi AP interface when available)
+
+Do not bridge your WAN interface into br10.
+
+Create VLAN 10 on end0:
+
+```bash
+sudo ip link show end0.10 >/dev/null 2>&1 || sudo ip link add link end0 name end0.10 type vlan id 10
+sudo ip link set end0.10 up
+```
+
+Create bridge br10, add end0.10 and USB-LAN to it, and put the gateway IP on br10:
+
+```bash
+USBIF="<YOUR_USB_LAN_INTERFACE>"   # example: enx00e04c68b637 (leave as-is if you don't have USB-LAN)
+
+sudo ip link add br10 type bridge 2>/dev/null || true
+sudo ip link set br10 up
+
+sudo ip addr flush dev end0.10
+sudo ip link set end0.10 master br10
+
+if ip link show "$USBIF" >/dev/null 2>&1; then
+  sudo ip addr flush dev "$USBIF" || true
+  sudo ip link set "$USBIF" up
+  sudo ip link set "$USBIF" master br10
+fi
+
+sudo ip addr replace 10.0.0.1/24 dev br10
+ip -br addr show br10 end0.10 "$USBIF" 2>/dev/null || true
+```
+
+## 7) Generate configs (nftables + dnsmasq)
 
 ### nftables (captive portal redirect + allowlist + NAT)
 
 ```bash
+sudo mkdir -p /etc/nftables.d
 sudo /usr/local/bin/pisowifi render nft \
-  --lan-if br0 \
-  --wan-if eth0 \
-  --portal-port 8080 \
-  --client-cidr 10.10.0.0/16 \
+  --lan-if br10 \
+  --wan-if end0 \
+  --portal-port 80 \
+  --client-cidr 10.0.0.0/24 \
   | sudo tee /etc/nftables.d/pisowifi.nft
 
 echo 'include "/etc/nftables.d/pisowifi.nft"' | sudo tee /etc/nftables.conf
+sudo nft -c -f /etc/nftables.conf
 sudo systemctl enable --now nftables
 ```
 
 ### dnsmasq (DHCP/DNS for VLAN 10)
 
+On Ubuntu, `systemd-resolved` listens on 127.0.0.53:53. To avoid port conflicts, bind dnsmasq only to the hotspot gateway IP.
+
 ```bash
 sudo /usr/local/bin/pisowifi render dnsmasq \
-  --if br0.10 \
-  --start 10.10.10.50 \
-  --end 10.10.10.200 \
+  --if br10 \
+  --start 10.0.0.50 \
+  --end 10.0.0.200 \
   --lease 12h \
-  --router 10.10.10.1 \
-  --dns 10.10.10.1 \
+  --router 10.0.0.1 \
+  --dns 10.0.0.1 \
   | sudo tee /etc/dnsmasq.d/pisowifi.conf
 
+sudo sed -i '1i bind-dynamic\nexcept-interface=lo\nlisten-address=10.0.0.1\n' /etc/dnsmasq.d/pisowifi.conf
+sudo dnsmasq --test
 sudo systemctl restart dnsmasq
 ```
 
-### hostapd (SSID mapped to bridge br0.10)
+## 8) Install Nginx (recommended: portal on port 80)
+
+Nginx listens on 10.0.0.1:80 and proxies to the app running on 127.0.0.1:8080.
+
+```bash
+sudo apt update
+sudo apt install -y nginx
+```
+
+```bash
+sudo tee /etc/nginx/sites-available/pisowifi >/dev/null <<'NGINX'
+server {
+    listen 10.0.0.1:80;
+    server_name _;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+NGINX
+```
+
+```bash
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo ln -sf /etc/nginx/sites-available/pisowifi /etc/nginx/sites-enabled/pisowifi
+sudo nginx -t
+sudo systemctl enable --now nginx
+sudo systemctl restart nginx
+```
+
+## 9) hostapd (optional: only if you have a Wi‑Fi interface)
+
+If `iw dev` shows a Wi‑Fi interface `<WIFI_IF>`, map the SSID to the bridge `br10`:
 
 ```bash
 sudo /usr/local/bin/pisowifi render hostapd \
-  --radio wlan0 \
+  --radio <WIFI_IF> \
   --ssid PISO \
-  --bridge br0.10 \
+  --bridge br10 \
   --pass "password123" \
   | sudo tee /etc/hostapd/hostapd.conf
 
@@ -130,7 +207,7 @@ echo 'DAEMON_CONF="/etc/hostapd/hostapd.conf"' | sudo tee /etc/default/hostapd
 sudo systemctl enable --now hostapd
 ```
 
-## 7) Run the portal as a system service (systemd)
+## 10) Run the portal as a system service (systemd)
 
 Create storage directory:
 
@@ -148,7 +225,7 @@ After=network-online.target nftables.service
 Wants=network-online.target
 
 [Service]
-ExecStart=/usr/local/bin/pisowifi serve --listen :8080 --db /var/lib/pisowifi/pisowifi.db --nft-enable --nft-table "inet pisowifi" --nft-allowed4-set allowed4 --title "PiSoWiFi"
+ExecStart=/usr/local/bin/pisowifi serve --listen 127.0.0.1:8080 --db /var/lib/pisowifi/pisowifi.db --nft-enable --nft-table "inet pisowifi" --nft-allowed4-set allowed4 --title "PiSoWiFi"
 Restart=always
 RestartSec=2
 
@@ -165,7 +242,7 @@ sudo systemctl enable --now pisowifi
 sudo systemctl status pisowifi --no-pager
 ```
 
-## 8) Quick test
+## 11) Quick test
 
 Create a voucher:
 
@@ -175,21 +252,21 @@ curl -sS -X POST http://127.0.0.1:8080/api/v1/vouchers \
   -d '{"minutes":60}'
 ```
 
-Connect a client to the SSID and open any HTTP site; it should redirect to the portal.
+Connect a client (USB-LAN or Wi‑Fi). Open an HTTP site; it should redirect to the portal at http://10.0.0.1/.
 
-## 9) Adding more VLANs
+## 12) Adding more VLANs
 
-Repeat for VLAN 20, 30, etc:
+Repeat for VLAN/SSID 20, 30, etc (use a new bridge per VLAN/SSID):
 
 ```bash
-sudo ip link add link br0 name br0.20 type vlan id 20
-sudo ip addr add 10.10.20.1/24 dev br0.20
-sudo ip link set br0.20 up
+sudo ip link add br20 type bridge
+sudo ip addr add 10.10.20.1/24 dev br20
+sudo ip link set br20 up
 ```
 
 Add additional dnsmasq ranges (another `render dnsmasq` output block per VLAN).
 
-## 10) Where to upload this app (recommended)
+## 13) Where to upload this app (recommended)
 
 If you want an SSH-only deployment flow, the simplest is:
 

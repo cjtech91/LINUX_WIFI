@@ -194,22 +194,31 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if ip == "" {
 		ip = clientIPFromRequest(r)
 	}
-	sess, ok, err := s.store.GetActiveSessionByIP(r.Context(), ip, time.Now().UTC())
+	now := time.Now().UTC()
+	sess, ok, err := s.store.GetActiveSessionByIP(r.Context(), ip, now)
 	if err != nil {
 		http.Error(w, "status failed", http.StatusInternalServerError)
 		return
 	}
-	writeJSON(w, struct {
-		IP     string        `json:"ip"`
-		Active bool          `json:"active"`
-		EndAt  time.Time     `json:"end_at_utc,omitempty"`
-		Left   time.Duration `json:"seconds_left,omitempty"`
-	}{
+	type statusResponse struct {
+		IP          string    `json:"ip"`
+		Active      bool      `json:"active"`
+		EndAtUTC    time.Time `json:"end_at_utc,omitempty"`
+		SecondsLeft int64     `json:"seconds_left,omitempty"`
+	}
+	resp := statusResponse{
 		IP:     ip,
 		Active: ok,
-		EndAt:  sess.EndAt.UTC(),
-		Left:   time.Until(sess.EndAt).Truncate(time.Second),
-	})
+	}
+	if ok {
+		resp.EndAtUTC = sess.EndAt.UTC()
+		secondsLeft := int64(sess.EndAt.Sub(now).Truncate(time.Second).Seconds())
+		if secondsLeft < 0 {
+			secondsLeft = 0
+		}
+		resp.SecondsLeft = secondsLeft
+	}
+	writeJSON(w, resp)
 }
 
 func (s *Server) consumeVoucher(ctx context.Context, code string, mac string, ip string) (store.ConsumeVoucherResult, error) {
