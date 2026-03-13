@@ -84,6 +84,11 @@ func (c *SysfsPulseCounter) loop(edge string) {
 		last = buf[0]
 	}
 
+	pfd := []syscall.PollFd{{
+		Fd:     int32(c.fd),
+		Events: syscall.POLLPRI | syscall.POLLERR,
+	}}
+
 	for {
 		select {
 		case <-c.stop:
@@ -91,15 +96,13 @@ func (c *SysfsPulseCounter) loop(edge string) {
 		default:
 		}
 
-		var rfds syscall.FdSet
-		fdSet(c.fd, &rfds)
-		timeout := syscall.Timeval{Sec: 1, Usec: 0}
-		_, err := syscall.Select(c.fd+1, &rfds, nil, nil, &timeout)
+		pfd[0].Revents = 0
+		_, err := syscall.Poll(pfd, 1000)
 		if err != nil {
 			time.Sleep(50 * time.Millisecond)
 			continue
 		}
-		if !fdIsSet(c.fd, &rfds) {
+		if (pfd[0].Revents & (syscall.POLLPRI | syscall.POLLERR)) == 0 {
 			continue
 		}
 
@@ -146,12 +149,4 @@ func sysfsEnsureGPIO(pin int) error {
 		time.Sleep(20 * time.Millisecond)
 	}
 	return fmt.Errorf("gpio%d did not appear", pin)
-}
-
-func fdSet(fd int, set *syscall.FdSet) {
-	set.Bits[fd/64] |= 1 << (uint(fd) % 64)
-}
-
-func fdIsSet(fd int, set *syscall.FdSet) bool {
-	return (set.Bits[fd/64] & (1 << (uint(fd) % 64))) != 0
 }
