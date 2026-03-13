@@ -73,6 +73,8 @@ const adminHTML = `<!doctype html>
       .btn.primary:hover{background:#2563eb}
       .btn.danger{background:#7f1d1d;border-color:#991b1b}
       .btn.danger:hover{background:#9b2222}
+      .btn.sm{padding:8px 10px;font-size:13px;white-space:nowrap}
+      .actionsRow{display:flex;gap:6px;align-items:center;flex-wrap:nowrap}
       .formRow{display:flex;gap:10px;align-items:center;margin:8px 0}
       .formRow label{width:160px;color:var(--muted);font-size:14px}
       .formRow input[type="text"], .formRow input[type="number"]{flex:1;min-width:0;border:1px solid #0b152b;background:#141b2a;color:var(--text);border-radius:8px;padding:8px}
@@ -430,13 +432,12 @@ const adminHTML = `<!doctype html>
 
               const tdAct = document.createElement('td');
               const ratesBtn = document.createElement('button');
-              ratesBtn.className = 'btn';
+              ratesBtn.className = 'btn sm';
               ratesBtn.textContent = 'Rates';
               ratesBtn.addEventListener('click', () => openRatesModal());
 
               const freeBtn = document.createElement('button');
-              freeBtn.className = 'btn';
-              freeBtn.style.marginLeft = '6px';
+              freeBtn.className = 'btn sm';
               freeBtn.textContent = 'Free Time';
               freeBtn.addEventListener('click', async () => {
                 const m = prompt('Free time minutes for voucher?');
@@ -452,8 +453,11 @@ const adminHTML = `<!doctype html>
                 }
               });
 
-              tdAct.appendChild(ratesBtn);
-              tdAct.appendChild(freeBtn);
+              const row = document.createElement('div');
+              row.className = 'actionsRow';
+              row.appendChild(ratesBtn);
+              row.appendChild(freeBtn);
+              tdAct.appendChild(row);
               tr.appendChild(tdAct);
 
               tbody.appendChild(tr);
