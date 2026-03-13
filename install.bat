@@ -192,7 +192,7 @@ set "TMP_SCRIPT=%TEMP%\pisowifi_install_%RANDOM%.sh"
   echo echo "== nginx config (portal on http://$LAN_IP/) =="
   echo sudo tee /etc/nginx/sites-available/pisowifi ^>/dev/null ^<^< 'NGINX'
   echo server ^{
-  echo ^    listen %LAN_IP%:80;
+  echo ^    listen 80;
   echo ^    server_name _;
   echo.
   echo ^    location / ^{

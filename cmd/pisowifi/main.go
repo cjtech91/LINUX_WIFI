@@ -49,6 +49,8 @@ func serve(args []string) {
 	nftAllowed4 := fs.String("nft-allowed4-set", "allowed4", "nftables set for allowed IPv4 addresses")
 	nftExecPath := fs.String("nft-path", "nft", "Path to nft binary")
 	allowMinutes := fs.Int("default-minutes", 60, "Default minutes if not provided")
+	adminUser := fs.String("admin-user", "", "Admin username for /admin (optional)")
+	adminPass := fs.String("admin-pass", "", "Admin password for /admin (optional)")
 	_ = fs.Parse(args)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -75,6 +77,8 @@ func serve(args []string) {
 		Allowlister:    allowlister,
 		DefaultMinutes: *allowMinutes,
 		Title:          *portalTitle,
+		AdminUser:      *adminUser,
+		AdminPass:      *adminPass,
 	})
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)

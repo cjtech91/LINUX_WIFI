@@ -159,7 +159,7 @@ sudo systemctl restart dnsmasq
 
 ## 8) Install Nginx (recommended: portal on port 80)
 
-Nginx listens on 10.0.0.1:80 and proxies to the app running on 127.0.0.1:8080.
+Nginx listens on port 80 and proxies to the app running on 127.0.0.1:8080.
 
 ```bash
 sudo apt update
@@ -169,7 +169,7 @@ sudo apt install -y nginx
 ```bash
 sudo tee /etc/nginx/sites-available/pisowifi >/dev/null <<'NGINX'
 server {
-    listen 10.0.0.1:80;
+    listen 80;
     server_name _;
 
     location / {

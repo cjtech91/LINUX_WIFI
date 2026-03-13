@@ -20,6 +20,8 @@ type ServerDeps struct {
 	Allowlister    Allowlister
 	DefaultMinutes int
 	Title          string
+	AdminUser      string
+	AdminPass      string
 }
 
 type Server struct {
@@ -28,6 +30,9 @@ type Server struct {
 	defaultMinutes int
 	title          string
 	portalTmpl     *template.Template
+	adminUser      string
+	adminPass      string
+	adminTmpl      *template.Template
 }
 
 func NewServer(d ServerDeps) *Server {
@@ -45,6 +50,7 @@ func NewServer(d ServerDeps) *Server {
 	}
 
 	tmpl := template.Must(template.New("portal").Parse(portalHTML))
+	admin := template.Must(template.New("admin").Parse(adminHTML))
 
 	return &Server{
 		store:          d.Store,
@@ -52,6 +58,9 @@ func NewServer(d ServerDeps) *Server {
 		defaultMinutes: mins,
 		title:          title,
 		portalTmpl:     tmpl,
+		adminUser:      strings.TrimSpace(d.AdminUser),
+		adminPass:      strings.TrimSpace(d.AdminPass),
+		adminTmpl:      admin,
 	}
 }
 
@@ -62,6 +71,9 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/vouchers", s.handleCreateVoucher)
 	mux.HandleFunc("POST /api/v1/login", s.handleAPILogin)
 	mux.HandleFunc("GET /api/v1/status", s.handleStatus)
+
+	mux.HandleFunc("GET /admin", s.handleAdmin)
+	mux.HandleFunc("GET /api/admin/summary", s.handleAdminSummary)
 }
 
 func (s *Server) handlePortal(w http.ResponseWriter, r *http.Request) {
@@ -219,6 +231,49 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		resp.SecondsLeft = secondsLeft
 	}
 	writeJSON(w, resp)
+}
+
+func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
+	if s.adminUser != "" {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != s.adminUser || p != s.adminPass {
+			w.Header().Set("WWW-Authenticate", `Basic realm="admin"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+	data := struct {
+		Title string
+	}{
+		Title: s.title,
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_ = s.adminTmpl.Execute(w, data)
+}
+
+func (s *Server) handleAdminSummary(w http.ResponseWriter, r *http.Request) {
+	if s.adminUser != "" {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != s.adminUser || p != s.adminPass {
+			w.Header().Set("WWW-Authenticate", `Basic realm="admin"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+	}
+	now := time.Now().UTC()
+	active, _ := s.store.CountActiveSessions(r.Context(), now)
+	vcount, _ := s.store.CountVouchers(r.Context())
+	writeJSON(w, struct {
+		ActiveSessions int64  `json:"active_sessions"`
+		Vouchers       int64  `json:"vouchers"`
+		GatewayIP      string `json:"gateway_ip"`
+		TimeUTC        string `json:"time_utc"`
+	}{
+		ActiveSessions: active,
+		Vouchers:       vcount,
+		GatewayIP:      r.Host,
+		TimeUTC:        now.Format(time.RFC3339),
+	})
 }
 
 func (s *Server) consumeVoucher(ctx context.Context, code string, mac string, ip string) (store.ConsumeVoucherResult, error) {

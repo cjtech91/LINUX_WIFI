@@ -97,11 +97,11 @@ func (s *Store) ConsumeVoucher(ctx context.Context, p ConsumeVoucherParams) (Con
 	defer func() { _ = tx.Rollback() }()
 
 	var (
-		minutes        int
-		createdAtUnix  int64
-		usedAtUnix     sql.NullInt64
-		usedByMAC      sql.NullString
-		usedByIP       sql.NullString
+		minutes       int
+		createdAtUnix int64
+		usedAtUnix    sql.NullInt64
+		usedByMAC     sql.NullString
+		usedByIP      sql.NullString
 	)
 	row := tx.QueryRowContext(ctx, `
 		select minutes, created_at_unix, used_at_unix, used_by_mac, used_by_ip
@@ -247,3 +247,23 @@ func nullIfEmpty(s string) sql.NullString {
 	return sql.NullString{String: s, Valid: true}
 }
 
+func (s *Store) CountVouchers(ctx context.Context) (int64, error) {
+	row := s.db.QueryRowContext(ctx, `select count(*) from vouchers`)
+	var n int64
+	if err := row.Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+func (s *Store) CountActiveSessions(ctx context.Context, now time.Time) (int64, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	row := s.db.QueryRowContext(ctx, `select count(*) from sessions where end_at_unix > ?`, now.Unix())
+	var n int64
+	if err := row.Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
