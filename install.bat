@@ -129,6 +129,42 @@ set "TMP_SCRIPT=%TEMP%\pisowifi_install_%RANDOM%.sh"
   echo fi
   echo sudo ip addr replace "$LAN_IP/$LAN_PREFIX" dev br10
   echo.
+  echo echo "== Persisting network setup at boot (systemd) =="
+  echo sudo tee /etc/pisowifi.env ^>/dev/null ^<^< 'ENV'
+  echo WAN_IF=$WAN_IF
+  echo VLAN_ID=$VLAN_ID
+  echo USB_IF=$USB_IF
+  echo LAN_IP=$LAN_IP
+  echo LAN_PREFIX=$LAN_PREFIX
+  echo ENV
+  echo sudo tee /etc/systemd/system/pisowifi-net.service ^>/dev/null ^<^< 'UNIT'
+  echo [Unit]
+  echo Description=PiSoWiFi Network Setup
+  echo Wants=network-online.target
+  echo After=network-online.target
+  echo Before=dnsmasq.service nginx.service nftables.service pisowifi.service
+  echo.
+  echo [Service]
+  echo Type=oneshot
+  echo RemainAfterExit=yes
+  echo EnvironmentFile=-/etc/pisowifi.env
+  echo ExecStart=/bin/bash -lc 'set -euxo pipefail; WAN_IF="${WAN_IF:-AUTO}"; VLAN_ID="${VLAN_ID:-13}"; USB_IF="${USB_IF:-}"; LAN_IP="${LAN_IP:-10.0.0.1}"; LAN_PREFIX="${LAN_PREFIX:-24}"; if [ -z "$WAN_IF" ] || [ "$WAN_IF" = "AUTO" ]; then if ip link show end0 >/dev/null 2>&1; then WAN_IF="end0"; elif ip link show eth0 >/dev/null 2>&1; then WAN_IF="eth0"; else WAN_IF="$(ip -o -4 route show to default 2>/dev/null | sed -E "s/.* dev ([^ ]+).*/\\1/;q")"; fi; fi; [ -n "$WAN_IF" ]; ip link show "$WAN_IF" >/dev/null; ip link show "$WAN_IF.$VLAN_ID" >/dev/null 2>&1 || ip link add link "$WAN_IF" name "$WAN_IF.$VLAN_ID" type vlan id "$VLAN_ID"; ip link set "$WAN_IF.$VLAN_ID" up; ip link add br10 type bridge 2>/dev/null || true; ip link set br10 up; ip addr flush dev "$WAN_IF.$VLAN_ID" || true; ip link set "$WAN_IF.$VLAN_ID" master br10; if [ -n "$USB_IF" ] && ip link show "$USB_IF" >/dev/null 2>&1; then ip addr flush dev "$USB_IF" || true; ip link set "$USB_IF" up; ip link set "$USB_IF" master br10; fi; ip addr replace "$LAN_IP/$LAN_PREFIX" dev br10'
+  echo.
+  echo [Install]
+  echo WantedBy=multi-user.target
+  echo UNIT
+  echo sudo install -d -m 0755 /etc/systemd/system/dnsmasq.service.d /etc/systemd/system/nginx.service.d
+  echo sudo tee /etc/systemd/system/dnsmasq.service.d/pisowifi.conf ^>/dev/null ^<^< 'OVR'
+  echo [Unit]
+  echo Requires=pisowifi-net.service
+  echo After=pisowifi-net.service
+  echo OVR
+  echo sudo tee /etc/systemd/system/nginx.service.d/pisowifi.conf ^>/dev/null ^<^< 'OVR'
+  echo [Unit]
+  echo Requires=pisowifi-net.service
+  echo After=pisowifi-net.service
+  echo OVR
+  echo.
   echo echo "== dnsmasq config =="
   echo sudo /usr/local/bin/pisowifi render dnsmasq ^
   echo ^  --if br10 ^
@@ -177,8 +213,9 @@ set "TMP_SCRIPT=%TEMP%\pisowifi_install_%RANDOM%.sh"
   echo sudo tee /etc/systemd/system/pisowifi.service ^>/dev/null ^<^< 'UNIT'
   echo [Unit]
   echo Description=PiSoWiFi Portal
-  echo After=network-online.target nftables.service
-  echo Wants=network-online.target
+  echo Requires=pisowifi-net.service
+  echo After=pisowifi-net.service network-online.target nftables.service nginx.service dnsmasq.service
+  echo Wants=pisowifi-net.service network-online.target
   echo.
   echo [Service]
   echo ExecStart=/usr/local/bin/pisowifi serve --listen 127.0.0.1:8080 --db /var/lib/pisowifi/pisowifi.db --nft-enable --nft-table "inet pisowifi" --nft-allowed4-set allowed4 --title "PiSoWiFi"
@@ -189,8 +226,9 @@ set "TMP_SCRIPT=%TEMP%\pisowifi_install_%RANDOM%.sh"
   echo WantedBy=multi-user.target
   echo UNIT
   echo sudo systemctl daemon-reload
+  echo sudo systemctl enable --now pisowifi-net
   echo sudo systemctl enable --now dnsmasq nftables nginx pisowifi
-  echo sudo systemctl restart dnsmasq nftables nginx pisowifi
+  echo sudo systemctl restart pisowifi-net dnsmasq nftables nginx pisowifi
   echo.
   echo echo "== Done =="
   echo echo "Portal: http://%LAN_IP%/"

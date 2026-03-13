@@ -136,6 +136,17 @@ table {{.TableFamily}} {{.TableName}} {
     flags timeout
   }
 
+  chain input {
+    type filter hook input priority filter; policy drop;
+    ct state established,related accept
+    iifname "lo" accept
+
+    iifname "{{.WANInterface}}" tcp dport 22 accept
+
+    iifname "{{.LANInterface}}" udp dport { 53, 67, 68 } accept
+    iifname "{{.LANInterface}}" tcp dport {{.PortalPort}} accept
+  }
+
   chain prerouting {
     type nat hook prerouting priority dstnat; policy accept;
     iifname "{{.LANInterface}}" ip saddr {{.ClientCIDR}} ip saddr != @{{.Allowed4Set}} tcp dport 80 redirect to :{{.PortalPort}}
@@ -146,9 +157,6 @@ table {{.TableFamily}} {{.TableName}} {
     ct state established,related accept
 
     iifname "{{.LANInterface}}" oifname "{{.WANInterface}}" ip saddr {{.ClientCIDR}} ip saddr @{{.Allowed4Set}} accept
-
-    iifname "{{.LANInterface}}" udp dport { 53, 67, 68 } accept
-    iifname "{{.LANInterface}}" tcp dport 80 accept
   }
 
   chain postrouting {
@@ -203,4 +211,3 @@ wpa_passphrase={{$s.Password}}
 
 {{- end}}
 `
-

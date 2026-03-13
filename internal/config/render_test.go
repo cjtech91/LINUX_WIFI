@@ -29,6 +29,12 @@ func TestRenderNFTables(t *testing.T) {
 	if !strings.Contains(out, `iifname "br0"`) || !strings.Contains(out, `oifname "eth0"`) {
 		t.Fatalf("missing interfaces: %s", out)
 	}
+	if !strings.Contains(out, "chain input") {
+		t.Fatalf("missing input chain: %s", out)
+	}
+	if !strings.Contains(out, `iifname "eth0" tcp dport 22 accept`) {
+		t.Fatalf("missing ssh allow on WAN: %s", out)
+	}
 }
 
 func TestRenderDNSMasq(t *testing.T) {
@@ -77,4 +83,3 @@ func TestRenderHostapdMultiBSS(t *testing.T) {
 		t.Fatalf("missing ssid/bridge: %s", out)
 	}
 }
-
