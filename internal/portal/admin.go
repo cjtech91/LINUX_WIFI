@@ -64,6 +64,15 @@ const adminHTML = `<!doctype html>
         .span-4{grid-column:span 6}
         .span-3{grid-column:span 6}
       }
+      .backdrop{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:50}
+      .modal{width:min(720px,94vw);background:#1c2433;border:1px solid #0b152b;border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.4);display:flex;flex-direction:column;max-height:86vh}
+      .modalHeader{padding:14px 16px;border-bottom:1px solid #0b152b;font-weight:800}
+      .modalBody{padding:12px 16px;overflow:auto}
+      .modalFooter{padding:12px 16px;border-top:1px solid #0b152b;display:flex;justify-content:flex-end;gap:8px}
+      .btn.primary{background:#3b82f6;border-color:#60a5fa}
+      .btn.primary:hover{background:#2563eb}
+      .btn.danger{background:#7f1d1d;border-color:#991b1b}
+      .btn.danger:hover{background:#9b2222}
     </style>
   </head>
   <body>
@@ -394,26 +403,7 @@ const adminHTML = `<!doctype html>
           }
         }
         document.getElementById('ratesBtn').addEventListener('click', async () => {
-          const val = prompt('Enter rates as minutes,price;minutes,price (e.g., 60,10;180,25;1440,60)');
-          if (!val) return;
-          const parts = val.split(';').map(s => s.trim()).filter(Boolean);
-          const arr = [];
-          for (const p of parts) {
-            const kv = p.split(',').map(s => s.trim());
-            if (kv.length === 2) {
-              const m = parseInt(kv[0], 10);
-              const pr = parseFloat(kv[1]);
-              if (!isNaN(m) && !isNaN(pr)) arr.push({minutes: m, price: pr});
-            }
-          }
-          try {
-            const res = await fetch('/api/admin/rates', {method:'POST', body: JSON.stringify(arr)});
-            if (!res.ok) throw new Error('bad');
-            document.getElementById('actionOut').textContent = 'Rates saved';
-            refreshRates();
-          } catch {
-            document.getElementById('actionOut').textContent = 'Failed to save rates';
-          }
+          openRatesModal();
         });
         document.getElementById('freeBtn').addEventListener('click', async () => {
           const m = prompt('Free time minutes for voucher?');
@@ -429,6 +419,82 @@ const adminHTML = `<!doctype html>
           }
         });
         refreshRates();
+      }
+
+      function formatDuration(mins){
+        if (!mins || mins < 60) return (mins|0) + 'm';
+        if (mins % 1440 === 0) return (mins/1440|0) + 'd';
+        if (mins % 60 === 0) return (mins/60|0) + 'h';
+        const h = (mins/60)|0, m = mins%60; return h+'h '+m+'m';
+      }
+
+      async function openRatesModal(){
+        let data = [];
+        try {
+          const res = await fetch('/api/admin/rates', {cache:'no-store'});
+          if (res.ok) data = await res.json();
+        } catch {}
+        if (!Array.isArray(data)) data = [];
+
+        const backdrop = document.createElement('div');
+        backdrop.className = 'backdrop';
+        backdrop.style.display = 'flex';
+        const modal = document.createElement('div');
+        modal.className = 'modal';
+        modal.innerHTML =
+          '<div class="modalHeader">Main Vendo Rates</div>' +
+          '<div class="modalBody">' +
+          '  <div style="display:flex;justify-content:flex-end;margin-bottom:8px">' +
+          '    <button class="btn primary" id="addRateBtn">Add New Rate</button>' +
+          '  </div>' +
+          '  <div style="overflow:auto">' +
+          '    <table class="table" id="ratesTable">' +
+          '      <thead><tr><th>₱ Amount</th><th>Duration</th><th>Action</th></tr></thead>' +
+          '      <tbody></tbody>' +
+          '    </table>' +
+          '  </div>' +
+          '</div>' +
+          '<div class="modalFooter"><button class="btn" id="closeRateBtn">Close</button></div>';
+        backdrop.appendChild(modal);
+        document.body.appendChild(backdrop);
+
+        function render(){
+          const tb = modal.querySelector('#ratesTable tbody');
+          tb.innerHTML = '';
+          data.forEach((r, idx) => {
+            const tr = document.createElement('tr');
+            const tdA = document.createElement('td'); tdA.textContent = '₱'+(r.price ?? '');
+            const tdD = document.createElement('td'); tdD.textContent = formatDuration(r.minutes ?? 0);
+            const tdAct = document.createElement('td');
+            const del = document.createElement('button'); del.className = 'btn danger'; del.textContent = 'Delete';
+            del.addEventListener('click', async () => { data.splice(idx,1); await save(); });
+            tdAct.appendChild(del);
+            tr.appendChild(tdA); tr.appendChild(tdD); tr.appendChild(tdAct);
+            tb.appendChild(tr);
+          });
+        }
+        async function save(){
+          try {
+            const res = await fetch('/api/admin/rates', {method:'POST', body: JSON.stringify(data)});
+            if (!res.ok) throw new Error('bad');
+            render();
+          } catch {}
+        }
+        modal.querySelector('#addRateBtn').addEventListener('click', async () => {
+          const amount = prompt('Amount in pesos (e.g., 10)');
+          const price = parseFloat((amount||'').trim());
+          if (isNaN(price) || price<=0) return;
+          const dur = prompt('Duration in minutes (e.g., 60 for 1h)');
+          const minutes = parseInt((dur||'').trim(), 10);
+          if (isNaN(minutes) || minutes<=0) return;
+          data.push({minutes, price});
+          await save();
+        });
+        modal.querySelector('#closeRateBtn').addEventListener('click', () => {
+          document.body.removeChild(backdrop);
+        });
+        backdrop.addEventListener('click', (e) => { if (e.target === backdrop) document.body.removeChild(backdrop); });
+        render();
       }
     </script>
   </body>
