@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"html/template"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -317,6 +318,8 @@ func (s *Server) handleCoinStart(w http.ResponseWriter, r *http.Request) {
 	s.coinMu.Lock()
 	defer s.coinMu.Unlock()
 
+	s.cleanupExpiredCoinSessionLocked(now)
+
 	if s.coinSess != nil && now.Before(s.coinSess.ExpiresAt) {
 		secondsLeft := int64(s.coinSess.ExpiresAt.Sub(now).Truncate(time.Second).Seconds())
 		if secondsLeft < 0 {
@@ -347,6 +350,21 @@ func (s *Server) handleCoinStart(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt: now.Add(s.coinWindow),
 		BaseCount: s.coinCounter.Current(),
 	}
+	time.AfterFunc(s.coinWindow+2*time.Second, func() {
+		s.coinMu.Lock()
+		defer s.coinMu.Unlock()
+		if s.coinSess == nil || s.coinSess.Token != tok {
+			return
+		}
+		if time.Now().UTC().Before(s.coinSess.ExpiresAt) {
+			return
+		}
+		s.coinSess = nil
+		if s.coinCounter != nil {
+			_ = s.coinCounter.Close()
+			s.coinCounter = nil
+		}
+	})
 
 	writeJSON(w, struct {
 		Ok            bool      `json:"ok"`
@@ -414,6 +432,18 @@ func (s *Server) handleCoinStatus(w http.ResponseWriter, r *http.Request) {
 		Minutes:     mins,
 		UsedAmount:  usedAmount,
 	})
+
+	if secondsLeft == 0 {
+		s.coinMu.Lock()
+		if s.coinSess != nil && s.coinSess.Token == token {
+			s.coinSess = nil
+		}
+		if s.coinCounter != nil {
+			_ = s.coinCounter.Close()
+			s.coinCounter = nil
+		}
+		s.coinMu.Unlock()
+	}
 }
 
 func (s *Server) handleCoinCancel(w http.ResponseWriter, r *http.Request) {
@@ -538,6 +568,7 @@ func (s *Server) ensureCoinCounter() bool {
 	if !s.coinEnable {
 		return false
 	}
+	s.cleanupExpiredCoinSessionLocked(time.Now().UTC())
 	edge := strings.TrimSpace(s.coinEdge)
 	if edge == "" {
 		edge = "rising"
@@ -554,6 +585,20 @@ func (s *Server) ensureCoinCounter() bool {
 	}
 	s.coinCounter = c
 	return true
+}
+
+func (s *Server) cleanupExpiredCoinSessionLocked(now time.Time) {
+	if s.coinSess == nil {
+		return
+	}
+	if now.Before(s.coinSess.ExpiresAt) {
+		return
+	}
+	s.coinSess = nil
+	if s.coinCounter != nil {
+		_ = s.coinCounter.Close()
+		s.coinCounter = nil
+	}
 }
 
 func (s *Server) getRates(ctx context.Context) []rate {
@@ -874,18 +919,12 @@ func (s *Server) handleAdminSetRates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer r.Body.Close()
-	buf := make([]byte, 0, 4096)
-	tmp := make([]byte, 1024)
-	for {
-		n, err := r.Body.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
-		}
-		if err != nil {
-			break
-		}
+	b, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "read body failed", http.StatusBadRequest)
+		return
 	}
-	js := strings.TrimSpace(string(buf))
+	js := strings.TrimSpace(string(b))
 	if js == "" {
 		http.Error(w, "empty body", http.StatusBadRequest)
 		return
